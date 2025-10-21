@@ -98,12 +98,9 @@ class ActorRolloutRefWorker:
 
 @ray.remote
 class AsyncvLLMServer:
-    def __init__(self, config, data_system_controller_infos):
+    def __init__(self, config, data_system_client):
         self.config = config
-        self.data_system_client = AsyncTransferQueueClient(
-            client_id="AsyncvLLMServer",
-            controller_infos=data_system_controller_infos[0],
-        )
+        self.data_system_client = data_system_client
 
         self.data_system_client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=self.config)
 
@@ -135,11 +132,11 @@ class AsyncRolloutWorker:
     def __init__(
         self,
         config,
-        data_system_controller_infos,
+        data_system_client,
     ):
         self.async_vllm_server = AsyncvLLMServer.remote(
             config,
-            data_system_controller_infos,
+            data_system_client,
         )
 
     async def generate_sequences(self, data_meta_chunk):
@@ -157,20 +154,12 @@ class AsyncRolloutWorker:
 
 
 class RolloutManager:
-    def __init__(self, config, data_system_storage_unit_infos, data_system_controller_infos):
+    def __init__(self, config, data_system_client):
         self.config = config
-
-        self.data_system_client = AsyncTransferQueueClient(
-            client_id="RolloutManager",
-            controller_infos=data_system_controller_infos[0],
-        )
-
-        self.data_system_client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=self.config)
-
         self.async_rollout_workers = []
         num_workers = self.config.rollout_agent_num_workers
         for i in range(num_workers):
-            self.async_rollout_workers.append(AsyncRolloutWorker.remote(config, data_system_controller_infos))
+            self.async_rollout_workers.append(AsyncRolloutWorker.remote(config, data_system_client))
 
     def generate_sequences(self, data_meta):
         data_meta_chunkes = data_meta.chunk(len(self.async_rollout_workers))
@@ -193,11 +182,13 @@ class Trainer:
         self.actor_rollout_wg = ActorRolloutRefWorker()
         self.async_rollout_manager = RolloutManager(
             self.config,
-            self.data_system_storage_unit_infos,
-            self.data_system_controller_infos,
+            self.data_system_client,
         )
+        # Initialize storage manager here for transmitting the same client instance to multiple places.
+        # Otherwise, Ray will report a serialization error.
+        self.data_system_client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=self.config)
 
-    def _initialize_data_system(self):
+    def _initialize_data_system( self):
         # TODO (TQStorage): provide a general data system initialization utility function
         # 1. 初始化TransferQueueStorage
         total_storage_size = self.config.global_batch_size * self.config.num_global_batch * self.config.num_n_samples
@@ -245,8 +236,6 @@ class Trainer:
             client_id="Trainer",
             controller_infos=self.data_system_controller_infos[0],
         )
-
-        self.data_system_client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=self.config)
 
         return self.data_system_client
 
