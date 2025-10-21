@@ -47,6 +47,8 @@ logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 TQ_CONTROLLER_GET_METADATA_TIMEOUT = int(os.environ.get("TQ_CONTROLLER_GET_METADATA_TIMEOUT", 300))
 TQ_CONTROLLER_GET_METADATA_CHECK_INTERVAL = int(os.environ.get("TQ_CONTROLLER_GET_METADATA_CHECK_INTERVAL", 1))
+TQ_CONTROLLER_HANDSHAKE_TIMEOUT = int(os.environ.get("TQ_CONTROLLER_HANDSHAKE_TIMEOUT", 60))
+TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL = int(os.environ.get("TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL", 30))
 TQ_INIT_FIELD_NUM = int(os.environ.get("TQ_INIT_FIELD_NUM", 10))
 
 
@@ -89,6 +91,7 @@ class TransferQueueController:
         self.per_tensor_dtype_mapping: dict[int, dict[str, Any]] = {}
         self.per_tensor_shape_mapping: dict[int, dict[str, Any]] = {}
 
+        self._connected_storage_managers: set[str] = set()
         self._start_process_handshake()
         self._start_process_update_data_status()
         self._start_process_request()
@@ -530,23 +533,73 @@ class TransferQueueController:
         )
 
     def _wait_connection(self):
-        """Wait for all storage instances to complete handshake.
+        """Wait for storage instances to complete handshake with duplicate handling and timeout.
 
-        Clients don't need to handshake to support dynamic scaling. Continuously
-        listens for handshake messages until all expected storage units connect.
+        Handles retransmission cases by sending ACK for duplicate HANDSHAKE messages.
+        Stops operation when no messages received for timeout period.
         """
-        # TODO(zjj): Consider if retransmission is needed (assuming cases where Storage doesn't receive ACK)
+        poller = zmq.Poller()
+        poller.register(self.handshake_socket, zmq.POLLIN)
+
+        last_message_time = time.time()
+
+        logger.info(f"Controller {self.controller_id} started waiting for storage connections...")
+
         while True:
-            identity, serialized_msg = self.handshake_socket.recv_multipart()
-            request_msg = ZMQMessage.deserialize(serialized_msg)
-            if request_msg.request_type == ZMQRequestType.HANDSHAKE:
-                response_msg = ZMQMessage.create(
-                    request_type=ZMQRequestType.HANDSHAKE_ACK,
-                    sender_id=self.controller_id,
-                    body={},
-                ).serialize()
-                self.handshake_socket.send_multipart([identity, response_msg])
-                logger.info("Controller sent handshake ack successfully!")
+            # Check if we should stop due to timeout
+            current_time = time.time()
+            if current_time - last_message_time > TQ_CONTROLLER_HANDSHAKE_TIMEOUT:
+                if len(self._connected_storage_managers) > 0:
+                    logger.info(
+                        f"Controller {self.controller_id} stopping handshake wait due to timeout. "
+                        f"Connected storage managers: {len(self._connected_storage_managers)}"
+                    )
+                else:
+                    logger.warning(
+                        f"Controller {self.controller_id} stopping handshake wait due to timeout. "
+                        f"No storage managers connected."
+                    )
+                break
+
+            # Wait for messages with timeout
+            socks = dict(poller.poll(TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL * 1000))
+
+            if self.handshake_socket in socks:
+                try:
+                    identity, serialized_msg = self.handshake_socket.recv_multipart()
+                    request_msg = ZMQMessage.deserialize(serialized_msg)
+
+                    if request_msg.request_type == ZMQRequestType.HANDSHAKE:
+                        storage_manager_id = request_msg.sender_id
+                        last_message_time = current_time
+
+                        # Always send ACK for HANDSHAKE (handles retransmission)
+                        response_msg = ZMQMessage.create(
+                            request_type=ZMQRequestType.HANDSHAKE_ACK,
+                            sender_id=self.controller_id,
+                            body={},
+                        ).serialize()
+                        self.handshake_socket.send_multipart([identity, response_msg])
+
+                        # Track new connections
+                        if storage_manager_id not in self._connected_storage_managers:
+                            self._connected_storage_managers.add(storage_manager_id)
+                            storage_manager_type = request_msg.body.get("storage_manager_type", "Unknown")
+                            logger.info(
+                                f"Controller {self.controller_id} received handshake from "
+                                f"storage manager {storage_manager_id} (type: {storage_manager_type}). "
+                                f"Total connected: {len(self._connected_storage_managers)}"
+                            )
+                        else:
+                            logger.debug(
+                                f"Controller {self.controller_id} received duplicate handshake from "
+                                f"storage manager {storage_manager_id}. Resending ACK."
+                            )
+
+                except Exception as e:
+                    logger.error(f"Controller {self.controller_id} error processing handshake: {e}")
+
+        logger.info(f"Controller {self.controller_id} handshake wait process finished.")
 
     def _start_process_handshake(self):
         """Start the handshake process thread."""
