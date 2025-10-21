@@ -47,8 +47,7 @@ logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 TQ_CONTROLLER_GET_METADATA_TIMEOUT = int(os.environ.get("TQ_CONTROLLER_GET_METADATA_TIMEOUT", 300))
 TQ_CONTROLLER_GET_METADATA_CHECK_INTERVAL = int(os.environ.get("TQ_CONTROLLER_GET_METADATA_CHECK_INTERVAL", 1))
-TQ_CONTROLLER_HANDSHAKE_TIMEOUT = int(os.environ.get("TQ_CONTROLLER_HANDSHAKE_TIMEOUT", 60))
-TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL = int(os.environ.get("TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL", 30))
+TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL = int(os.environ.get("TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL", 2))
 TQ_INIT_FIELD_NUM = int(os.environ.get("TQ_INIT_FIELD_NUM", 10))
 
 
@@ -533,34 +532,25 @@ class TransferQueueController:
         )
 
     def _wait_connection(self):
-        """Wait for storage instances to complete handshake with duplicate handling and timeout.
+        """
+        Wait for storage instances to complete handshake with retransmission support.
 
-        Handles retransmission cases by sending ACK for duplicate HANDSHAKE messages.
-        Stops operation when no messages received for timeout period.
+        This method runs continuously in a dedicated thread to handle handshake responses for
+        new TransferQueueStorageManager connections. It listens for handshake requests from
+        storage managers and responds with acknowledgments, ensuring that new storage units can
+        connect and be tracked even after the initial startup phase.
+
+        The method includes a retransmission mechanism - if a storage manager resends a
+        HANDSHAKE message (e.g., due to network issues or timeout), the controller will
+        detect it as a duplicate and resend the ACK response without treating it as a new
+        connection.
         """
         poller = zmq.Poller()
         poller.register(self.handshake_socket, zmq.POLLIN)
 
-        last_message_time = time.time()
-
         logger.info(f"Controller {self.controller_id} started waiting for storage connections...")
 
         while True:
-            # Check if we should stop due to timeout
-            current_time = time.time()
-            if current_time - last_message_time > TQ_CONTROLLER_HANDSHAKE_TIMEOUT:
-                if len(self._connected_storage_managers) > 0:
-                    logger.info(
-                        f"Controller {self.controller_id} stopping handshake wait due to timeout. "
-                        f"Connected storage managers: {len(self._connected_storage_managers)}"
-                    )
-                else:
-                    logger.warning(
-                        f"Controller {self.controller_id} stopping handshake wait due to timeout. "
-                        f"No storage managers connected."
-                    )
-                break
-
             # Wait for messages with timeout
             socks = dict(poller.poll(TQ_CONTROLLER_CONNECTION_CHECK_INTERVAL * 1000))
 
@@ -571,7 +561,6 @@ class TransferQueueController:
 
                     if request_msg.request_type == ZMQRequestType.HANDSHAKE:
                         storage_manager_id = request_msg.sender_id
-                        last_message_time = current_time
 
                         # Always send ACK for HANDSHAKE (handles retransmission)
                         response_msg = ZMQMessage.create(
@@ -598,8 +587,6 @@ class TransferQueueController:
 
                 except Exception as e:
                     logger.error(f"Controller {self.controller_id} error processing handshake: {e}")
-
-        logger.info(f"Controller {self.controller_id} handshake wait process finished.")
 
     def _start_process_handshake(self):
         """Start the handshake process thread."""

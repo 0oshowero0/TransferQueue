@@ -44,11 +44,11 @@ from transfer_queue.utils.zmq_utils import (
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
-TQ_STORAGE_POLLER_TIMEOUT = os.environ.get("TQ_STORAGE_POLLER_TIMEOUT", 1000)
+TQ_STORAGE_POLLER_TIMEOUT = int(os.environ.get("TQ_STORAGE_POLLER_TIMEOUT", 1))
 TQ_STORAGE_HANDSHAKE_TIMEOUT = int(os.environ.get("TQ_STORAGE_HANDSHAKE_TIMEOUT", 30))
-TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL = int(os.environ.get("TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL", 5))
+TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL = int(os.environ.get("TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL", 1))
 TQ_STORAGE_HANDSHAKE_MAX_RETRIES = int(os.environ.get("TQ_STORAGE_HANDSHAKE_MAX_RETRIES", 3))
-TQ_DATA_UPDATE_RESPONSE_TIMEOUT = int(os.environ.get("TQ_DATA_UPDATE_RESPONSE_TIMEOUT", 600))
+TQ_DATA_UPDATE_RESPONSE_TIMEOUT = int(os.environ.get("TQ_DATA_UPDATE_RESPONSE_TIMEOUT", 30))
 
 # TODO (TQStorage): Carefully check all the docstrings in this file.
 
@@ -146,8 +146,13 @@ class TransferQueueStorageManager(ABC):
                     self._send_handshake_requests({controller_id})
                     last_retry_time[controller_id] = current_time
                     handshake_retries[controller_id] += 1
+                elif handshake_retries[controller_id] >= TQ_STORAGE_HANDSHAKE_MAX_RETRIES:
+                    raise TimeoutError(
+                        f"[{self.storage_manager_id}]: Handshake with controller {controller_id} failed after "
+                        f"{TQ_STORAGE_HANDSHAKE_MAX_RETRIES} attempts."
+                    )
 
-            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT))
+            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
 
             for controller_id, controller_handshake_socket in self.controller_handshake_sockets.items():
                 if controller_handshake_socket in socks and controller_id in pending_controllers:
@@ -167,6 +172,7 @@ class TransferQueueStorageManager(ABC):
                             f"[{self.storage_manager_id}]: Error receiving handshake response from {controller_id}: {e}"
                         )
 
+        # FIXME: This may not be reachable due to the TimeoutError raised above
         if len(connected_controllers) < len(self.controller_infos):
             logger.error(
                 f"[{self.storage_manager_id}]: Only get {len(connected_controllers)} / {len(self.controller_infos)} "
@@ -174,7 +180,8 @@ class TransferQueueStorageManager(ABC):
             )
             for controller_id in pending_controllers:
                 logger.error(
-                    f"[{self.storage_manager_id}]: Failed to connect to controller {controller_id} after "
+                    f"[{self.storage_manager_id}]: Failed to connect to controller "
+                    f"{controller_id} ({self.controller_infos[controller_id].ip}) after "
                     f"{handshake_retries[controller_id]} retries"
                 )
 
@@ -287,7 +294,7 @@ class TransferQueueStorageManager(ABC):
                         )
 
         if len(response_controllers) < len(self.controller_infos):
-            logger.warning(
+            logger.error(
                 f"[{self.storage_manager_id}]: Storage manager id #{self.storage_manager_id} "
                 f"only get {len(response_controllers)} / {len(self.controller_infos)} "
                 f"data status update ACK responses from controllers."
