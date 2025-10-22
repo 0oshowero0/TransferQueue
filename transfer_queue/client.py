@@ -395,7 +395,7 @@ class AsyncTransferQueueClient:
             socket: ZMQ socket (injected by decorator)
 
         Returns:
-            BatchMeta Records the metadata of a batch of data samples.
+            BatchMeta: Records the metadata of a batch of data samples.
 
         Raises:
             RuntimeError: If controller returns error response
