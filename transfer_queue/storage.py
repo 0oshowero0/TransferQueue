@@ -44,7 +44,8 @@ from transfer_queue.utils.zmq_utils import (
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
-TQ_STORAGE_POLLER_TIMEOUT = int(os.environ.get("TQ_STORAGE_POLLER_TIMEOUT", 1))
+# ZMQ timeouts（in seconds）and retry configurations
+TQ_STORAGE_POLLER_TIMEOUT = int(os.environ.get("TQ_STORAGE_POLLER_TIMEOUT", 5))
 TQ_STORAGE_HANDSHAKE_TIMEOUT = int(os.environ.get("TQ_STORAGE_HANDSHAKE_TIMEOUT", 30))
 TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL = int(os.environ.get("TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL", 1))
 TQ_STORAGE_HANDSHAKE_MAX_RETRIES = int(os.environ.get("TQ_STORAGE_HANDSHAKE_MAX_RETRIES", 3))
@@ -74,13 +75,15 @@ class TransferQueueStorageManager(ABC):
             if isinstance(self.controller_infos, ZMQServerInfo):
                 self.controller_infos = {self.controller_infos.id: self.controller_infos}
             elif isinstance(self.controller_infos, dict):
+                raw_controller_infos = self.controller_infos
                 self.controller_infos = {}
-                for _, v in self.controller_infos.items():
-                    if isinstance(v, ZMQServerInfo):
-                        self.controller_infos[v.id] = v
+                for controller_info in raw_controller_infos.items():
+                    if isinstance(controller_info, ZMQServerInfo):
+                        self.controller_infos[controller_info.id] = controller_info
                     else:
                         raise ValueError(
-                            f"controller_infos should be ZMQServerInfo | dict[str, ZMQServerInfo], but got {v}"
+                            f"controller_infos should be ZMQServerInfo | dict[str, ZMQServerInfo], "
+                            f"but got {type(controller_info)}"
                         )
 
             # create zmq context
@@ -148,14 +151,15 @@ class TransferQueueStorageManager(ABC):
                     handshake_retries[controller_id] += 1
                 elif handshake_retries[controller_id] >= TQ_STORAGE_HANDSHAKE_MAX_RETRIES:
                     raise TimeoutError(
-                        f"[{self.storage_manager_id}]: Handshake with controller {controller_id} failed after "
+                        f"[{self.storage_manager_id}]: Handshake with controller {controller_id} "
+                        f"({self.controller_infos[controller_id].ip}) failed after "
                         f"{TQ_STORAGE_HANDSHAKE_MAX_RETRIES} attempts."
                     )
 
             socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
 
             for controller_id, controller_handshake_socket in self.controller_handshake_sockets.items():
-                if controller_handshake_socket in socks and controller_id in pending_controllers:
+                if (socks.get(controller_handshake_socket, 0) & zmq.POLLIN) and controller_id in pending_controllers:
                     try:
                         response_msg = ZMQMessage.deserialize(controller_handshake_socket.recv())
 
@@ -171,19 +175,6 @@ class TransferQueueStorageManager(ABC):
                         logger.warning(
                             f"[{self.storage_manager_id}]: Error receiving handshake response from {controller_id}: {e}"
                         )
-
-        # FIXME: This may not be reachable due to the TimeoutError raised above
-        if len(connected_controllers) < len(self.controller_infos):
-            logger.error(
-                f"[{self.storage_manager_id}]: Only get {len(connected_controllers)} / {len(self.controller_infos)} "
-                f"successful handshake connections to controllers from storage manager id #{self.storage_manager_id}"
-            )
-            for controller_id in pending_controllers:
-                logger.error(
-                    f"[{self.storage_manager_id}]: Failed to connect to controller "
-                    f"{controller_id} ({self.controller_infos[controller_id].ip}) after "
-                    f"{handshake_retries[controller_id]} retries"
-                )
 
     def _send_handshake_requests(self, controller_ids: set[str]) -> None:
         """Send handshake requests to specified controllers."""
@@ -279,7 +270,7 @@ class TransferQueueStorageManager(ABC):
             len(response_controllers) < len(self.controller_infos)
             and time.time() - start_time < TQ_DATA_UPDATE_RESPONSE_TIMEOUT
         ):
-            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT))
+            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
 
             for data_status_update_socket in self.data_status_update_sockets.values():
                 if data_status_update_socket in socks:
@@ -454,7 +445,7 @@ class SimpleStorageUnit:
         poller.register(self.put_get_socket, zmq.POLLIN)
 
         while True:
-            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT))
+            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
 
             if self.put_get_socket in socks:
                 identity, serialized_msg = self.put_get_socket.recv_multipart()
