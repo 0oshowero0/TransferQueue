@@ -137,7 +137,7 @@ class TransferQueueStorageManager(ABC):
         ):
             # Check for timeout and retransmission
             current_time = time.time()
-            for controller_id in pending_controllers:
+            for controller_id in list(pending_controllers):
                 if (
                     current_time - last_retry_time[controller_id] >= TQ_STORAGE_HANDSHAKE_RETRY_INTERVAL
                     and handshake_retries[controller_id] < TQ_STORAGE_HANDSHAKE_MAX_RETRIES
