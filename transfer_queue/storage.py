@@ -834,9 +834,9 @@ def build_storage_meta_groups(
             - batch_index: Position in original TensorDict (0-based)
             - global_index: Global unique identifier across all storage
         global_index_storage_unit_mapping: Function to map global_index to storage_unit_id.
-            Example: lambda x: f"storage_{x % 3}" (round-robin distribution)
+            Example: lambda x: storage_unit_ids[x % num_storage_units] (round-robin distribution)
         global_index_local_index_mapping: Function to map global_index to local_index.
-            Example: lambda x: x // 3 (local position within storage unit)
+            Example: lambda x: x // num_storage_units (local position within storage unit)
 
     Returns:
         Dictionary mapping storage_unit_id to StorageMetaGroup, where each group contains:
@@ -906,11 +906,12 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         ]
         self.global_index_local_index_mapping = lambda x: x // len(self.storage_unit_infos)
 
-    def _register_servers(self, server_infos):
+    def _register_servers(self, server_infos: "ZMQServerInfo | dict[Any, ZMQServerInfo]"):
         """Register and validate server information.
 
         Args:
-            server_infos: ZMQServerInfo or dict of server infos to register.
+            server_infos: ZMQServerInfo | dict[Any, ZMQServerInfo])
+                ZMQServerInfo or dict of server infos to register.
 
         Returns:
             Dictionary with server IDs as keys and ZMQServerInfo objects as values.
