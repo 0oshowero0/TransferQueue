@@ -51,6 +51,7 @@ class AsyncTransferQueueClient:
     reading data from storage, writing data to storage, and clearing data.
     """
 
+    # TODO: Simplify the code, using only a single controller.
     def __init__(
         self,
         client_id: str,
@@ -74,8 +75,13 @@ class AsyncTransferQueueClient:
         """Initialize the storage manager.
 
         Args:
-            manager_type: Type of storage manager to create
-            config: Configuration dictionary for the storage manager
+            manager_type: Type of storage manager to create. Supported types include:
+                          AsyncSimpleStorageManager, KVStorageManager (under development), etc.
+            config: Configuration dictionary for the storage manager. Must contain the
+                    following required keys:
+                    - data_system_controller_infos: ZMQ server information about the controllers
+                    - data_system_storage_unit_infos: ZMQ server information about the storage units
+
         """
         self.storage_manager = TransferQueueStorageManagerFactory.create(manager_type, config)
 
@@ -272,8 +278,8 @@ class AsyncTransferQueueClient:
 
         Args:
             data: Data to write as TensorDict
-            metadata: Optional metadata containing index and storage unit information.
-                     If None, metadata will be auto-generated.
+            metadata: Records the metadata of a batch of data samples, containing index and
+                      storage unit information. If None, metadata will be auto-generated.
             global_step: Current processing step (required if metadata is not provided)
 
         Raises:
@@ -281,23 +287,35 @@ class AsyncTransferQueueClient:
             RuntimeError: If storage operation fails
 
         Example:
+            >>> batch_size = 4
+            >>> seq_len = 16
+            >>> current_step = 0
             >>> # Example 1: Normal usage with existing metadata
             >>> batch_meta = asyncio.run(client.async_get_meta(
             ...     data_fields=["prompts", "attention_mask"],
-            ...     batch_size=4,
-            ...     global_step=0,
+            ...     batch_size=batch_size,
+            ...     global_step=current_step,
             ...     mode="fetch",
             ...     get_n_samples=False,
             ...     task_name="generate_sequences",
             ... ))
             >>> batch = asyncio.run(client.async_get_data(batch_meta))
-            >>> output = TensorDict({"response": torch.randn(4, 16)})
+            >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
             >>> asyncio.run(client.async_put(data=output, metadata=batch_meta))
             >>>
             >>> # Example 2: Initial data insertion without pre-existing metadata
-            >>> # WARNING: This may overwrite unconsumed data at the given global_step
-            >>> prompts = TensorDict({"prompts": torch.randn(16, 16)})  # 16 samples
-            >>> asyncio.run(client.async_put(data=prompts, global_step=0))
+            >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given global_step!
+            >>> # Please make sure the corresponding global_step is empty before calling the async_put()
+            >>> # without metadata.
+            >>> # Now we only support put all the data of the corresponding global step in once. You should repeat with
+            >>> # interleave the initial data if n_sample > 1 before calling the async_put().
+            >>> original_prompts = torch.randn(batch_size, seq_len)
+            >>> n_samples = 4
+            >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
+            >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
+            >>> # This will create metadata in "insert" mode internally.
+            >>> asyncio.run(client.async_put(data=prompts_repeated_batch, global_step=current_step))
+
         """
         if metadata is None:
             assert global_step is not None, "global_steps must be provided if metadata is not given"
@@ -456,7 +474,7 @@ class AsyncTransferQueueClient:
             raise
 
     @dynamic_socket(socket_name="request_handle_socket")
-    def check_current_step_consumption(self, task_name: str, global_step: int):
+    async def check_current_step_consumption(self, task_name: str, global_step: int):
         """Check if all samples for current step have been consumed.
 
         Args:
@@ -467,7 +485,7 @@ class AsyncTransferQueueClient:
         pass
 
     @dynamic_socket(socket_name="request_handle_socket")
-    def check_current_step_production(self, data_fields: list[str], global_step: int):
+    async def check_current_step_production(self, data_fields: list[str], global_step: int):
         """Check if all samples for current step are ready for consumption.
 
         Args:
