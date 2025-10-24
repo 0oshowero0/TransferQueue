@@ -347,7 +347,6 @@ class AsyncTransferQueueClient:
         Returns:
             TensorDict containing:
                 - Requested data fields (e.g., "prompts", "attention_mask")
-                - "global_indexes" field mapping samples to original global indexes
 
         Example:
             >>> batch_meta = asyncio.run(client.async_get_meta(
@@ -362,9 +361,6 @@ class AsyncTransferQueueClient:
             >>> print(batch)
             >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
 
-        Note:
-            The global_indexes field preserves the original mapping to storage units, which is
-            essential for correctly writing data back to storage units after processing.
         """
         if not metadata or metadata.size == 0:
             return TensorDict({}, batch_size=0)
