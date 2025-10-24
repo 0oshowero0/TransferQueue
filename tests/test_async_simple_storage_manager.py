@@ -142,19 +142,6 @@ async def test_async_storage_manager_mock_operations(mock_async_storage_manager)
         batch_size=2,
     )
 
-    # Mock successful PUT responses
-    put_response = ZMQMessage.create(
-        request_type=ZMQRequestType.PUT_DATA_RESPONSE,
-        sender_id="storage_0",
-        body={},
-    )
-
-    # Configure mock socket to return appropriate responses
-    async def mock_recv():
-        # This is a simplified mock - in real scenarios you'd need more sophisticated
-        # response handling based on the request type
-        return put_response.serialize()
-
     manager._put_to_single_storage_unit = AsyncMock()
     manager._get_from_single_storage_unit = AsyncMock(
         return_value=([0, 1], ["test_field"], {"test_field": [torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])]})

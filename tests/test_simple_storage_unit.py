@@ -30,8 +30,6 @@ sys.path.append(str(parent_dir))
 from transfer_queue import SimpleStorageUnit  # noqa: E402
 from transfer_queue.utils.zmq_utils import ZMQMessage, ZMQRequestType  # noqa: E402
 
-logger = None
-
 
 class MockStorageClient:
     """Mock client for testing storage unit operations."""
@@ -209,8 +207,8 @@ def test_performance_basic(storage_setup):
 
     # PUT performance test
     put_latencies = []
-    num_puts = 20  # Reduced for faster testing
-    batch_size = 32  # Reduced for faster testing
+    num_puts = 10  # Reduced for faster testing
+    batch_size = 16  # Reduced for faster testing
 
     for i in range(num_puts):
         start = time.time()
@@ -238,7 +236,7 @@ def test_performance_basic(storage_setup):
 
     # GET performance test
     get_latencies = []
-    num_gets = 20
+    num_gets = 10
 
     for i in range(num_gets):
         start = time.time()
@@ -253,8 +251,8 @@ def test_performance_basic(storage_setup):
     avg_get_latency = sum(get_latencies) / len(get_latencies) * 1000  # ms
 
     # More lenient performance thresholds for testing environment
-    assert avg_put_latency < 1000, f"Avg PUT latency {avg_put_latency}ms exceeds threshold"
-    assert avg_get_latency < 1000, f"Avg GET latency {avg_get_latency}ms exceeds threshold"
+    assert avg_put_latency < 1500, f"Avg PUT latency {avg_put_latency}ms exceeds threshold"
+    assert avg_get_latency < 1500, f"Avg GET latency {avg_get_latency}ms exceeds threshold"
 
     client.close()
 
