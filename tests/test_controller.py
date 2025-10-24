@@ -23,8 +23,8 @@ import torch
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
-from transfer_queue import TransferQueueController
-from transfer_queue.controller import TQ_INIT_FIELD_NUM
+from transfer_queue import TransferQueueController  # noqa: E402
+from transfer_queue.controller import TQ_INIT_FIELD_NUM  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
