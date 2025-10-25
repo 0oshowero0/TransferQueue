@@ -243,6 +243,8 @@ class Trainer:
         self.data_system_client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=self.config)
         # Note: The client contains ZMQ objects. Currently, we cannot transmit the same client instance
         # to multiple places, as this will cause serialization errors in Ray.
+        # Workaround: If you need to use a client in multiple Ray actors or processes, create a separate
+        # AsyncTransferQueueClient instance for each actor/process instead of sharing or transmitting the same instance.
         return self.data_system_client
 
     def fit(self):
