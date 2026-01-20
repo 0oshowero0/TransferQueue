@@ -27,7 +27,6 @@ from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
 from .sampler.rank_aware_sampler import RankAwareSampler
 from .sampler.sequential_sampler import SequentialSampler
 from .storage import SimpleStorageUnit
-from .streaming_dataloader import StreamDataLoader, StreamingDataset
 from .utils.utils import get_placement_group
 from .utils.zmq_utils import ZMQServerInfo
 
@@ -44,8 +43,6 @@ __all__ = [
     "GRPOGroupNSampler",
     "SequentialSampler",
     "RankAwareSampler",
-    "StreamingDataset",
-    "StreamDataLoader",
 ]
 
 version_folder = os.path.dirname(os.path.join(os.path.abspath(__file__)))
