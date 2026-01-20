@@ -34,13 +34,15 @@ class BaseSampler(ABC):
     - **SequentialSampler**: Default sampler, selects samples sequentially without replacement
     - **GRPOGroupNSampler**: A sampler that performs sampling on continuous N samples only when all of them are ready.
                             It assumes the N samples associated with the same prompt are stored contiguously
-    - **RankAwareSampler**: Rank-aware sampling for distributed scenarios (TODO)
+    - **RankAwareSampler**: Rank-aware sampling for distributed training where each ranks independently retrieve data
+                            by themselves. This sampler will guarantee ranks of the same DP group consume identical
+                            samples.
 
     NOTE: Always return both sampled and consumed indexes (may be identical).
     """
 
     def __init__(self):
-        self._states: dict[str, Any] = {}
+        self._states: dict[Any, Any] = {}
 
     @abstractmethod
     def sample(
