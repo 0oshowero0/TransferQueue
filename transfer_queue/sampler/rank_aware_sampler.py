@@ -22,10 +22,9 @@ class RankAwareSampler(BaseSampler):
     """Rank-aware sampler for distributed training with TransferQueue.
 
     This sampler is designed for distributed data parallel training scenarios
-    where each ranks independently retrieve data by themselves.
+    where each rank retrieves data independently.
 
-    Each rank independently calls the sampler, passing its own rank information,
-    and the sampler guarantees that all ranks within the same DP group receive
+    This sampler guarantees that all ranks within the same DP group receive
     the same sample indices.
 
     The sampler maintains per-DP-group state to coordinate sampling across ranks:
@@ -72,7 +71,7 @@ class RankAwareSampler(BaseSampler):
             ready_indexes: List of global indices for which all required fields of the
                 corresponding samples have been produced, and the samples are not labeled
                 as consumed in the corresponding task.
-            batch_size: batch_size: Number of samples to select. If larger than available
+            batch_size: Number of samples to select. If larger than available
                 ready samples, all available samples will be returned.
             dp_group: The group id of current data parallel group. Used to
                 identify which DP group this rank belongs to.
@@ -89,9 +88,8 @@ class RankAwareSampler(BaseSampler):
             List of global indices of length batch_size that should be labeled as consumed
             (will never be retrieved in the future)
 
-        Raises:
-            RuntimeError: If the fetch count exceeds the expected number of
-                fetches per DP group.
+        Raise:
+            RuntimeError: If ``world_size`` is not divisible by ``dp_world_size``.
 
         Note:
             The ``world_size // dp_world_size`` calculation determines how many
@@ -102,6 +100,9 @@ class RankAwareSampler(BaseSampler):
         data_for_dp_group = self._states.get(dp_group, None)
 
         # Calculate how many times this batch should be fetched across all ranks
+        if world_size % dp_world_size != 0:
+            raise RuntimeError(f"world_size ({world_size}) is not divisible by dp_world_size ({dp_world_size})")
+
         fetches_per_batch = world_size // dp_world_size
 
         if data_for_dp_group is None:

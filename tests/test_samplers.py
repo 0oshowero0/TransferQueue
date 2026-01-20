@@ -499,7 +499,7 @@ class TestRankAwareSampler:
         sampled0_g0, consumed0_g0 = sampler.sample(
             ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
         )
-        # minic the consumption status update managed in TransferQueueController
+        # mimic the consumption status update managed in TransferQueueController
         ready_indexes = [i for i in ready_indexes if i not in consumed0_g0]
 
         # DP group 1: rank 0 samples first
