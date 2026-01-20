@@ -480,9 +480,9 @@ class TestRankAwareSampler:
         )
 
         assert sampled1 == sampled2 == [0, 1, 2]
-        # First rank returns empty consumed (not all ranks have fetched yet)
+        # First rank already returns consumed indexes
         assert consumed1 == [0, 1, 2]
-        # Last rank returns consumed when all ranks have fetched
+        # Second rank also sees the same consumed indexes; state is then cleaned up
         assert consumed2 == [0, 1, 2]
         # State should be cleaned up
         assert sampler._states == {}

@@ -75,7 +75,7 @@ class RankAwareSampler(BaseSampler):
                 ready samples, all available samples will be returned.
             dp_group: The group id of current data parallel group. Used to
                 identify which DP group this rank belongs to.
-            dp_world_size: Number of ranks in the data parallel group. Used to
+            dp_world_size: Number of ranks in the data parallelism group. Used to
                 determine when all ranks have fetched their samples.
             world_size: Total number of ranks across all parallelism dimensions.
                 Used to determine when all ranks have fetched their samples.
@@ -83,12 +83,14 @@ class RankAwareSampler(BaseSampler):
             **kwargs: Additional keyword arguments (ignored).
 
         Returns:
-            List of sampled global indices of length batch_size
+            List of sampled global indices. The length is
+            min(batch_size, len(ready_indexes)), and may be smaller than
+            batch_size if fewer ready samples are available.
 
-            List of global indices of length batch_size that should be labeled as consumed
-            (will never be retrieved in the future)
+            List of global indices that should be labeled as consumed
+            (will never be retrieved by other dp_groups in the future).
 
-        Raise:
+        Raises:
             RuntimeError: If ``world_size`` is not divisible by ``dp_world_size``.
 
         Note:
