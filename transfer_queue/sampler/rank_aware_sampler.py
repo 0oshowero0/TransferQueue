@@ -32,8 +32,8 @@ class RankAwareSampler(BaseSampler):
     - First rank in a DP group to call :meth:`sample` performs actual sampling from
       ``ready_indexes`` and caches the result
     - Subsequent ranks in the same DP group retrieve the cached indices
-    - Once all ranks in the DP group have fetched their samples, the indices are
-      marked as consumed
+    - Once all ranks in the DP group have fetched their samples, the cached state is
+      cleaned up.
 
 
     Please refer to our roadmap for more details:
@@ -83,36 +83,34 @@ class RankAwareSampler(BaseSampler):
             **kwargs: Additional keyword arguments (ignored).
 
         Returns:
-            List of sampled global indices. The length is
-            min(batch_size, len(ready_indexes)), and may be smaller than
-            batch_size if fewer ready samples are available.
+            List of sampled global indices. Typically, has length `batch_size`,
+            or returns an empty list if samples are insufficient.
 
             List of global indices that should be labeled as consumed
             (will never be retrieved by other dp_groups in the future).
 
         Raises:
             RuntimeError: If ``world_size`` is not divisible by ``dp_world_size``.
-
-        Note:
-            The ``world_size // dp_world_size`` calculation determines how many
-            times each batch should be fetched (once per TP/PP/... rank group).
         """
 
         # Check if this DP group already has sampled data cached
         data_for_dp_group = self._states.get(dp_group, None)
 
         # Calculate how many times this batch should be fetched across all ranks
-        if world_size % dp_world_size != 0:
+        if dp_world_size <= 0 or world_size % dp_world_size != 0:
             raise RuntimeError(f"world_size ({world_size}) is not divisible by dp_world_size ({dp_world_size})")
 
         fetches_per_batch = world_size // dp_world_size
 
         if data_for_dp_group is None:
-            # Initialize state for this DP group
-            self._states[dp_group] = {}
-
             # Select first batch_size indices from ready_indexes
             sampled_indexes = ready_indexes[:batch_size]
+
+            if len(sampled_indexes) < batch_size:
+                return [], []
+
+            # Initialize state for this DP group
+            self._states[dp_group] = {}
             consumed_indexes = sampled_indexes
 
             # Cache the sampled indices for other ranks in this DP group

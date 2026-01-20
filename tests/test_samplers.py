@@ -568,9 +568,8 @@ class TestRankAwareSampler:
         # When world_size == dp_world_size, fetches_per_batch=1, consumed returned immediately
         sampled, consumed = sampler.sample(ready_indexes, batch_size, dp_group=0, dp_world_size=2, world_size=2)
 
-        assert sampled == [0, 1]
-        assert consumed == [0, 1]
-        assert len(sampled) == len(ready_indexes)
+        assert sampled == []
+        assert consumed == []
 
     def test_rank_aware_sampler_zero_batch_size(self):
         """Test behavior with zero batch size."""
