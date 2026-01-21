@@ -20,6 +20,7 @@ import itertools
 import logging
 import os
 import pickle
+import warnings
 from collections.abc import Sequence
 from inspect import isclass
 from types import FunctionType
@@ -51,6 +52,10 @@ tensorenc = tuple[str, tuple[int, ...], int | memoryview]
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
+
+# Ignore warnings about non-writable buffers from torch.frombuffer. Upper codes will ensure
+# the tensors are writable to users.
+warnings.filterwarnings(action="ignore", message=r"The given buffer is not writable*", category=UserWarning)
 
 
 class MsgpackEncoder:
@@ -154,8 +159,9 @@ class MsgpackDecoder:
         if not buffer:  # torch.frombuffer doesn't like empty buffers
             assert 0 in shape
             return torch.empty(shape, dtype=torch_dtype)
-        # Create uint8 array and convert read-only buffer into writable bytearray
-        arr = torch.frombuffer(bytearray(buffer), dtype=torch.uint8)
+        # Create uint8 array. Upper codes should make sure the tensor is cloned so it has their own lifetime and
+        # become writable to users.
+        arr = torch.frombuffer(buffer, dtype=torch.uint8)
         # Convert back to proper shape & type
         return arr.view(torch_dtype).view(shape)
 

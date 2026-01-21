@@ -285,7 +285,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         # post-process data segments to generate a batch of data
         merged_data: dict[int, dict[str, torch.Tensor]] = {}
-        for global_indexes, fields, data_from_single_storage_unit in results:
+        for global_indexes, fields, data_from_single_storage_unit, messages in results:
             field_getter = itemgetter(*fields)
             field_values = field_getter(data_from_single_storage_unit)
 
@@ -303,9 +303,12 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         for field in metadata.field_names:
             ordered_data[field] = [merged_data[global_idx][field] for global_idx in metadata.global_indexes]
 
+        # In the final packing stage we intentionally perform a memory copy through torch.stack and as_nested_tensor.
+        # This detaches the received tensors from the original zero‑copy buffers,
+        # gives them their own lifetime, and ensures the resulting tensors are writable.
         tensor_data = {
             field: (
-                torch.stack(torch.nested.as_nested_tensor(v).unbind())
+                torch.stack(v)
                 if v
                 and all(isinstance(item, torch.Tensor) for item in v)
                 and all(item.shape == v[0].shape for item in v)
@@ -341,8 +344,10 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
             if response_msg.request_type == ZMQRequestType.GET_DATA_RESPONSE:
                 # Return data and index information from this storage unit
+                # We need to return messages to get_data() since the zero-copy deserialization directly points to the
+                # memory of messages object.
                 storage_unit_data = response_msg.body["data"]
-                return global_indexes, fields, storage_unit_data
+                return global_indexes, fields, storage_unit_data, messages
             else:
                 raise RuntimeError(
                     f"Failed to get data from storage unit {target_storage_unit}: "
