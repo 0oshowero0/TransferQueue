@@ -313,7 +313,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                 and all(isinstance(item, torch.Tensor) for item in v)
                 and all(item.shape == v[0].shape for item in v)
                 else (
-                    torch.nested.as_nested_tensor(v)
+                    torch.nested.as_nested_tensor(v, layout=torch.jagged)
                     if v and all(isinstance(item, torch.Tensor) for item in v)
                     else NonTensorStack(*v)
                 )

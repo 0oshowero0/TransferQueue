@@ -396,7 +396,7 @@ class KVStorageManager(TransferQueueStorageManager):
                 except RuntimeError:
                     try:
                         # Fallback to nested tensor if shapes are irregular
-                        merged_data[field] = torch.nested.as_nested_tensor(data_list)
+                        merged_data[field] = torch.nested.as_nested_tensor(data_list, layout=torch.jagged)
                     except Exception:
                         merged_data[field] = NonTensorStack(*data_list)
             else:

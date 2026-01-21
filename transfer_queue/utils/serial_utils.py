@@ -264,7 +264,9 @@ def deserialization(data: list[bytestr] | bytestr) -> Any:
                 tensors[i] = single_tensors[current_idx]
                 current_idx += 1
             else:
-                tensors[i] = torch.nested.as_nested_tensor(single_tensors[current_idx : current_idx + tensor_num])
+                tensors[i] = torch.nested.as_nested_tensor(
+                    single_tensors[current_idx : current_idx + tensor_num], layout=torch.strided
+                )
                 current_idx += tensor_num
 
         return _internal_rpc_pickler.deserialize(pickled_bytes, tensors)
