@@ -15,6 +15,7 @@
 
 from .base import BaseSampler
 from .grpo_group_n_sampler import GRPOGroupNSampler
+from .rank_aware_sampler import RankAwareSampler
 from .sequential_sampler import SequentialSampler
 
-__all__ = ["BaseSampler", "SequentialSampler", "GRPOGroupNSampler"]
+__all__ = ["BaseSampler", "SequentialSampler", "GRPOGroupNSampler", "RankAwareSampler"]

@@ -15,13 +15,20 @@
 
 """Unit tests for TransferQueue samplers."""
 
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from transfer_queue.sampler import BaseSampler
-from transfer_queue.sampler.grpo_group_n_sampler import GRPOGroupNSampler
-from transfer_queue.sampler.sequential_sampler import SequentialSampler
+# Setup path
+parent_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(parent_dir))
+
+from transfer_queue.sampler import BaseSampler  # noqa: E402
+from transfer_queue.sampler.grpo_group_n_sampler import GRPOGroupNSampler  # noqa: E402
+from transfer_queue.sampler.rank_aware_sampler import RankAwareSampler  # noqa: E402
+from transfer_queue.sampler.sequential_sampler import SequentialSampler  # noqa: E402
 
 
 class TestBaseSampler:
@@ -423,6 +430,155 @@ class TestGRPOGroupNSampler:
         sampled, consumed = sampler.sample(ready_indexes, batch_size, n_samples_per_prompt)
 
         # Should return empty lists when requesting more complete groups than available
+        assert sampled == []
+        assert consumed == []
+
+
+class TestRankAwareSampler:
+    """Test cases for RankAwareSampler."""
+
+    def test_rank_aware_sampler_initialization(self):
+        """Test RankAwareSampler initialization."""
+        sampler = RankAwareSampler()
+        assert isinstance(sampler, BaseSampler)
+        assert hasattr(sampler, "_states")
+        assert sampler._states == {}
+
+    def test_rank_aware_sampler_first_rank_sampling(self):
+        """Test that first rank in DP group performs actual sampling."""
+        sampler = RankAwareSampler()
+        ready_indexes = [0, 1, 2, 3, 4, 5]
+        batch_size = 3
+
+        # When world_size == dp_world_size, fetches_per_batch = 1
+        # First rank samples and immediately marks consumed (no other ranks to wait for)
+        sampled, consumed = sampler.sample(ready_indexes, batch_size, dp_group=0, dp_world_size=2, world_size=2)
+
+        assert sampled == [0, 1, 2]
+        # consumed is returned
+        assert consumed == [0, 1, 2]
+        assert len(sampled) == batch_size
+        # State should be cleaned up
+        assert sampler._states == {}
+
+    def test_rank_aware_sampler_second_rank_gets_cached(self):
+        """Test that second rank in DP group gets cached indices."""
+        sampler = RankAwareSampler()
+        ready_indexes = [0, 1, 2, 3, 4, 5]
+        batch_size = 3
+        dp_world_size = 2
+        world_size = 4  # Use world_size=4 so fetches_per_batch=2
+
+        # Rank 0 (dp_group=0) samples first
+        sampled1, consumed1 = sampler.sample(
+            ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
+        )
+
+        # Rank 1 (dp_group=0) should get same cached indices
+        sampled2, consumed2 = sampler.sample(
+            ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
+        )
+
+        assert sampled1 == sampled2 == [0, 1, 2]
+        # First rank already returns consumed indexes
+        assert consumed1 == [0, 1, 2]
+        # Second rank also sees the same consumed indexes; state is then cleaned up
+        assert consumed2 == [0, 1, 2]
+        # State should be cleaned up
+        assert sampler._states == {}
+
+    def test_rank_aware_sampler_multiple_dp_groups(self):
+        """Test that multiple DP groups work independently."""
+        sampler = RankAwareSampler()
+        ready_indexes = [0, 1, 2, 3, 4, 5, 6, 7]
+        batch_size = 2
+        dp_world_size = 4
+        world_size = 8
+
+        # DP group 0: rank 0 samples first
+        sampled0_g0, consumed0_g0 = sampler.sample(
+            ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
+        )
+        # mimic the consumption status update managed in TransferQueueController
+        ready_indexes = [i for i in ready_indexes if i not in consumed0_g0]
+
+        # DP group 1: rank 0 samples first
+        sampled0_g1, consumed0_g1 = sampler.sample(
+            ready_indexes, batch_size, dp_group=1, dp_world_size=dp_world_size, world_size=world_size
+        )
+        ready_indexes = [i for i in ready_indexes if i not in consumed0_g1]
+
+        # Both should have sampled their first batch
+        assert sampled0_g0 == [0, 1]
+        assert sampled0_g1 == [2, 3]
+        assert consumed0_g0 == [0, 1]
+        assert consumed0_g1 == [2, 3]
+
+        # DP group 0: rank 1 fetches cached, and all the data should be labeled as consumed
+        sampled1_g0, consumed1_g0 = sampler.sample(
+            ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
+        )
+        ready_indexes = [i for i in ready_indexes if i not in consumed1_g0]
+        assert sampled1_g0 == [0, 1]
+        assert consumed1_g0 == [0, 1]
+
+        # DP group 1: rank 1 fetches cached, and all the data should be labeled as consumed
+        sampled1_g1, consumed1_g1 = sampler.sample(
+            ready_indexes, batch_size, dp_group=1, dp_world_size=dp_world_size, world_size=world_size
+        )
+        ready_indexes = [i for i in ready_indexes if i not in consumed1_g1]
+        assert sampled1_g1 == [2, 3]
+        assert consumed1_g1 == [2, 3]
+
+        # DP group 0: rank 0 fetches again, this should return new data
+        sampled2_g0, consumed2_g0 = sampler.sample(
+            ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
+        )
+        ready_indexes = [i for i in ready_indexes if i not in consumed2_g0]
+        assert sampled2_g0 == [4, 5]
+        assert consumed2_g0 == [4, 5]
+
+        # DP group 0: rank 1 fetches cached
+        sampled3_g0, consumed3_g0 = sampler.sample(
+            ready_indexes, batch_size, dp_group=0, dp_world_size=dp_world_size, world_size=world_size
+        )
+        assert sampled3_g0 == [4, 5]
+        assert consumed3_g0 == [4, 5]
+
+        # Both groups should be cleaned up
+        assert sampler._states == {}
+
+    def test_rank_aware_sampler_empty_ready_indexes(self):
+        """Test behavior with empty ready indexes."""
+        sampler = RankAwareSampler()
+        ready_indexes = []
+        batch_size = 3
+
+        sampled, consumed = sampler.sample(ready_indexes, batch_size, dp_group=0, dp_world_size=2, world_size=2)
+
+        assert sampled == []
+        assert consumed == []
+
+    def test_rank_aware_sampler_batch_size_larger_than_ready(self):
+        """Test behavior when batch_size > len(ready_indexes)."""
+        sampler = RankAwareSampler()
+        ready_indexes = [0, 1]
+        batch_size = 5
+
+        # When world_size == dp_world_size, fetches_per_batch=1, consumed returned immediately
+        sampled, consumed = sampler.sample(ready_indexes, batch_size, dp_group=0, dp_world_size=2, world_size=2)
+
+        assert sampled == []
+        assert consumed == []
+
+    def test_rank_aware_sampler_zero_batch_size(self):
+        """Test behavior with zero batch size."""
+        sampler = RankAwareSampler()
+        ready_indexes = [0, 1, 2, 3]
+        batch_size = 0
+
+        sampled, consumed = sampler.sample(ready_indexes, batch_size, dp_group=0, dp_world_size=2, world_size=2)
+
         assert sampled == []
         assert consumed == []
 
