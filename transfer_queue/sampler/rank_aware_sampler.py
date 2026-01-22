@@ -110,7 +110,16 @@ class RankAwareSampler(BaseSampler):
             - List of global indices to mark as consumed (excluded from future
               retrieval by other data_replica_groups).
 
+        Raises:
+            ValueError: If ``data_replica_rank`` is invalid.
+
         """
+
+        if data_replica_rank >= data_replica_world_size or data_replica_rank < 0:
+            raise ValueError(
+                f"data_replica_rank {data_replica_rank} must bigger than 0 and less than "
+                f"data_replica_world_size {data_replica_world_size}"
+            )
 
         if partition_id not in self._states:
             self._states[partition_id] = {}
