@@ -19,12 +19,12 @@ import time
 import uuid
 from typing import Any, Iterator
 
+from tensordict import TensorDict
 from torch.utils.data import IterableDataset
 
-from transfer_queue import (
-    TransferQueueClient,
-    ZMQServerInfo,
-)
+from transfer_queue import TransferQueueClient
+from transfer_queue.metadata import BatchMeta
+from transfer_queue.utils.zmq_utils import ZMQServerInfo
 
 TQ_STREAMING_DATASET_EMPTY_BATCH_SLEEP_INTERVAL = float(
     os.environ.get("TQ_STREAMING_DATASET_EMPTY_BATCH_SLEEP_INTERVAL", 1)
@@ -46,30 +46,25 @@ class StreamingDataset(IterableDataset):
     This dataset is designed to work with RankAwareSampler for distributed training
     scenarios where each rank independently retrieves data through TransferQueue.
 
-    Each rank calls the sampler independently, passing its own rank information.
-    The RankAwareSampler guarantees that all ranks within the same DP group receive
-    the same sample indices, ensuring no data is duplicated or missed.
-
     Usage Example:
-        >>> # On each rank:
+        >>> # On each rank (same data_replica_group, different data_replica_rank):
         >>> dataset = StreamingDataset(
         ...     config=config,
         ...     micro_batch_size=4,
         ...     required_fields=["input_ids", "attention_mask"],
         ...     partition_id="train",
         ...     task_name="update_actor",
-        ...     dp_group=rank // dp_world_size,  # DP group ID for this rank
-        ...     dp_world_size=dp_world_size,
-        ...     world_size=total_world_size,
-        ...     rank=rank,
+        ...     data_replica_group=dp_group_id,  # Same for all ranks in DP group
+        ...     data_replica_rank=local_rank,    # Different for each rank
+        ...     data_replica_world_size=dp_world_size,
         ... )
         >>> dataloader = StreamingDataLoader(
         ...     dataset,
-        ...     batch_size=micro_batch_size,
         ...     num_workers=0,
         ... )
-        >>> for batch in dataloader:
+        >>> for batch, batch_meta in dataloader:
         ...     # batch is a TensorDict with the requested fields
+        ...     # batch_meta contains metadata for TransferQueue coordination
         ...     pass
     """
 
@@ -90,14 +85,25 @@ class StreamingDataset(IterableDataset):
             config: Configuration dictionary containing:
                 - controller_info: ZMQServerInfo for the TransferQueueController
                 - storage_backend: Storage backend type (e.g., "SimpleAsyncStorageManager")
-            micro_batch_size: Number of samples per micro-batch.
-            required_fields: List of field names to retrieve from storage.
-            partition_id: Partition ID for data versioning.
-            task_name: Unique identifier for the training task.
-            data_replica_group: The group id of current data replica group. Used to
-                identify which data replica group this rank belongs to.
-            data_replica_rank: Local rank inside this data_replica_group.
+                - Other backend-specific configuration
+            micro_batch_size: Number of samples per micro-batch. This is the batch size
+                that will be requested from TransferQueue for each iteration.
+            required_fields: List of field names to retrieve from storage. Only these
+                fields will be included in the returned batch.
+            partition_id: Partition ID for data versioning. Different partitions can
+                be used for different data versions or splits (e.g., "train", "val").
+            task_name: Unique identifier for the training task. This is used to track
+                which samples have been consumed by which task.
+            data_replica_group: The group ID of the current data replica group. All
+                ranks with the same data_replica_group will receive identical samples.
+            data_replica_rank: Local rank index within the data_replica_group. Range:
+                [0, data_replica_world_size - 1]
             data_replica_world_size: Total number of ranks in this data_replica_group.
+                Must be >= 1.
+
+        Raises:
+            ValueError: If data_replica_world_size < 1 or data_replica_rank is out of
+                valid range [0, data_replica_world_size - 1].
         """
 
         self.config = config
@@ -141,10 +147,10 @@ class StreamingDataset(IterableDataset):
         if not storage_backend:
             raise ValueError("Missing storage_backend in config")
 
-        self._tq_client = TransferQueueClient(client_id, self.config[controller_info])
+        self._tq_client = TransferQueueClient(client_id, controller_info)
         self._tq_client.initialize_storage_manager(manager_type=self.config.storage_backend, config=self.config)
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[tuple[TensorDict, BatchMeta]]:
         """Iterate over the dataset, yielding batches of data.
 
         Yields:

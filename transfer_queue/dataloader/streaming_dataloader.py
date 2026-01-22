@@ -34,9 +34,38 @@ if not logger.hasHandlers():
 class StreamingDataLoader(torch.utils.data.DataLoader):
     """StreamingDataLoader interface for TransferQueue.
 
-    This DataLoader wraps StreamingDataset and provides a familiar PyTorch
-    DataLoader interface for distributed training.
+    This DataLoader wraps StreamingDataset and provides a PyTorch DataLoader
+    interface for distributed training with streaming data access.
 
+    Key Features:
+    - Compatible with PyTorch training loops (for loop iteration)
+    - Works with StreamingDataset for streaming data access
+    - Supports distributed training via RankAwareSampler coordination
+
+
+    Note:
+        This DataLoader is typically used with StreamingDataset which manages
+        batch size internally. The standard PyTorch DataLoader batch_size
+        parameter is set to None because batching is handled by the dataset
+        in coordination with TransferQueue's sampling logic.
+
+    Example:
+        >>> dataset = StreamingDataset(
+        ...     config=config,
+        ...     micro_batch_size=4,
+        ...     required_fields=["input_ids", "attention_mask"],
+        ...     partition_id="train",
+        ...     task_name="update_actor",
+        ...     data_replica_group=0,
+        ...     data_replica_rank=0,
+        ...     data_replica_world_size=1,
+        ... )
+        >>> dataloader = StreamingDataLoader(dataset, num_workers=0)
+        >>> for batch, batch_meta in dataloader:
+        ...     # batch: TensorDict with requested fields
+        ...     # batch_meta: Metadata for TransferQueue coordination
+        ...     loss = model(batch)
+        ...     loss.backward()
     """
 
     def __init__(
@@ -59,13 +88,18 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
             num_workers: Number of subprocesses for data loading.
             collate_fn: Function to collate samples into batches.
             pin_memory: If True, pin memory for GPU transfer.
-            drop_last: If True, drop last incomplete batch.
             timeout: Timeout for data loading.
             worker_init_fn: Worker initialization function.
             multiprocessing_context: Multiprocessing context.
             prefetch_factor: Number of batches to prefetch per worker.
             persistent_workers: Keep workers alive between epochs.
             pin_memory_device: Device for pin_memory.
+
+        Note:
+            This DataLoader is designed to work with StreamingDataset which handles
+            batch size internally via the micro_batch_size parameter. The batch_size
+            parameter in PyTorch DataLoader is set to None because batching is managed
+            by the StreamingDataset in coordination with RankAwareSampler.
         """
 
         # Store reference to dataset for data retrieval
