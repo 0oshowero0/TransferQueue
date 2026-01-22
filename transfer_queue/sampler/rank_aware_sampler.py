@@ -92,7 +92,7 @@ class RankAwareSampler(BaseSampler):
                 corresponding samples have been produced, and the samples are not labeled
                 as consumed in the corresponding task.
             batch_size: Number of samples to select. If larger than available
-                ready samples, all available samples will be returned.
+                ready samples, no samples are returned and both lists are empty.
             data_replica_group: The group id of current data replica group. Used to
                 identify which data replica group this rank belongs to.
             data_replica_rank: Local rank inside this data_replica_group.
@@ -110,13 +110,16 @@ class RankAwareSampler(BaseSampler):
               retrieval by other data_replica_groups).
 
         Raises:
-            ValueError: If ``data_replica_rank`` is invalid.
+            ValueError: If ``data_replica_rank`` or ``data_replica_world_size`` is invalid.
 
         """
 
+        if data_replica_world_size < 1:
+            raise ValueError(f"data_replica_world_size {data_replica_world_size} must >= 1")
+
         if data_replica_rank >= data_replica_world_size or data_replica_rank < 0:
             raise ValueError(
-                f"data_replica_rank {data_replica_rank} must bigger than 0 and less than "
+                f"data_replica_rank {data_replica_rank} must be greater than or equal to 0 and less than "
                 f"data_replica_world_size {data_replica_world_size}"
             )
 

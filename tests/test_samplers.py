@@ -710,7 +710,6 @@ class TestRankAwareSampler:
         )
         assert sampled_rank1_time0 == [0, 1]
         assert consumed_rank1_time0 == [0, 1]
-        ready_indexes = [i for i in ready_indexes if i not in consumed_rank1_time0]
 
         assert sampler._states["test"]["task"][0][0] == []
         assert sampler._states["test"]["task"][0][1] == [[2, 3]]
@@ -740,7 +739,7 @@ class TestRankAwareSampler:
             ready_indexes,
             batch_size,
             data_replica_group=0,
-            data_replica_rank=1,
+            data_replica_rank=0,
             data_replica_world_size=2,
             task_name="task1",
             partition_id="test",
@@ -750,8 +749,8 @@ class TestRankAwareSampler:
         assert consumed_rank0_task1 == [0, 1]
         assert sampler._states["test"]["task0"][0][0] == []
         assert sampler._states["test"]["task0"][0][1] == [[0, 1]]
-        assert sampler._states["test"]["task1"][0][0] == [[0, 1]]
-        assert sampler._states["test"]["task1"][0][1] == []
+        assert sampler._states["test"]["task1"][0][0] == []
+        assert sampler._states["test"]["task1"][0][1] == [[0, 1]]
 
 
 class TestSamplerIntegration:
