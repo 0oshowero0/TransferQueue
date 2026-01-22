@@ -24,16 +24,15 @@ class RankAwareSampler(BaseSampler):
     This sampler is designed for distributed data parallel training scenarios
     where each rank retrieves data independently.
 
-    This sampler guarantees that all ranks within the same DP group receive
+    This sampler guarantees that all ranks within the same data replica group receive
     the same sample indices.
 
-    The sampler maintains per-DP-group state to coordinate sampling across ranks:
+    The sampler maintains inner state to coordinate sampling across ranks:
 
-    - First rank in a DP group to call :meth:`sample` performs actual sampling from
-      ``ready_indexes`` and caches the result
-    - Subsequent ranks in the same DP group retrieve the cached indices
-    - Once all ranks in the DP group have fetched their samples, the cached state is
-      cleaned up.
+    - First rank in a data replica group to call :meth:`sample` performs actual sampling from
+      ``ready_indexes`` and caches the result for other ranks in the same group
+    - Subsequent ranks in the same group retrieve the cached indices.
+    - If no cached indices are available, sampling is performed again and cached for others.
 
 
     Please refer to our roadmap for more details:
