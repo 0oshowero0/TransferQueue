@@ -21,6 +21,7 @@ from .client import (
     process_zmq_server_info,
 )
 from .controller import TransferQueueController
+from .dataloader import StreamingDataLoader, StreamingDataset
 from .metadata import BatchMeta
 from .sampler import BaseSampler
 from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
@@ -32,8 +33,10 @@ from .utils.zmq_utils import ZMQServerInfo
 
 __all__ = [
     "AsyncTransferQueueClient",
-    "BatchMeta",
     "TransferQueueClient",
+    "StreamingDataset",
+    "StreamingDataLoader",
+    "BatchMeta",
     "TransferQueueController",
     "SimpleStorageUnit",
     "ZMQServerInfo",

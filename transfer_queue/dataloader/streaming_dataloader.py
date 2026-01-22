@@ -1,0 +1,91 @@
+# Copyright 2025 Huawei Technologies Co., Ltd. All Rights Reserved.
+# Copyright 2025 The TransferQueue Team
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+import os
+from typing import Optional
+
+import torch
+
+from transfer_queue.dataloader.streaming_dataset import StreamingDataset
+
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
+
+# Ensure logger has a handler
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
+    logger.addHandler(handler)
+
+
+class StreamingDataLoader(torch.utils.data.DataLoader):
+    """StreamingDataLoader interface for TransferQueue.
+
+    This DataLoader wraps StreamingDataset and provides a familiar PyTorch
+    DataLoader interface for distributed training.
+
+    """
+
+    def __init__(
+        self,
+        dataset: StreamingDataset,
+        num_workers: int = 0,
+        collate_fn=None,
+        pin_memory: bool = False,
+        timeout: float = 0,
+        worker_init_fn=None,
+        multiprocessing_context=None,
+        prefetch_factor: Optional[int] = None,
+        persistent_workers: bool = False,
+        pin_memory_device: str = "",
+    ):
+        """Initialize the StreamDataLoader.
+
+        Args:
+            dataset: StreamingDataset instance.
+            num_workers: Number of subprocesses for data loading.
+            collate_fn: Function to collate samples into batches.
+            pin_memory: If True, pin memory for GPU transfer.
+            drop_last: If True, drop last incomplete batch.
+            timeout: Timeout for data loading.
+            worker_init_fn: Worker initialization function.
+            multiprocessing_context: Multiprocessing context.
+            prefetch_factor: Number of batches to prefetch per worker.
+            persistent_workers: Keep workers alive between epochs.
+            pin_memory_device: Device for pin_memory.
+        """
+
+        # Store reference to dataset for data retrieval
+        self.dataset = dataset
+
+        super().__init__(
+            dataset=dataset,
+            batch_size=None,  # Batch size is handled by the dataset
+            shuffle=None,
+            sampler=None,
+            batch_sampler=None,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory,
+            drop_last=False,
+            timeout=timeout,
+            worker_init_fn=worker_init_fn,
+            multiprocessing_context=multiprocessing_context,
+            generator=None,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
+            pin_memory_device=pin_memory_device,
+        )
