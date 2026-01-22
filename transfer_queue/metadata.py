@@ -125,8 +125,11 @@ class SampleMeta:
         selected_fields = {name: self.fields[name] for name in field_names if name in self.fields}
 
         # construct new SampleMeta instance
+        # TODO(tianyi): move custom_meta to FieldMeta level
         selected_sample_meta = SampleMeta(
-            fields=selected_fields, partition_id=self.partition_id, global_index=self.global_index
+            fields=selected_fields,
+            partition_id=self.partition_id,
+            global_index=self.global_index,
         )
 
         return selected_sample_meta
@@ -174,6 +177,8 @@ class BatchMeta:
 
     samples: list[SampleMeta]
     extra_info: dict[str, Any] = dataclasses.field(default_factory=dict)
+    # internal data for different storage backends: _custom_meta[global_index][field]
+    _custom_meta: dict[int, dict[str, Any]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize all computed properties during initialization"""
@@ -229,6 +234,16 @@ class BatchMeta:
     def partition_ids(self) -> list[str]:
         """Get partition ids for all samples in this batch as a list (one per sample)"""
         return getattr(self, "_partition_ids", [])
+
+    # Custom meta methods for different storage backends
+    def get_all_custom_meta(self) -> dict[int, dict[str, Any]]:
+        """Get the entire custom meta dictionary"""
+        return copy.deepcopy(self._custom_meta)
+
+    def update_custom_meta(self, new_custom_meta: dict[int, dict[str, Any]] = None):
+        """Update custom meta with a new dictionary"""
+        if new_custom_meta:
+            self._custom_meta.update(new_custom_meta)
 
     # Extra info interface methods
     def get_extra_info(self, key: str, default: Any = None) -> Any:

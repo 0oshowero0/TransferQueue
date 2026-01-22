@@ -14,8 +14,7 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-
-from torch import Tensor
+from typing import Any, Optional
 
 
 class TransferQueueStorageKVClient(ABC):
@@ -25,11 +24,36 @@ class TransferQueueStorageKVClient(ABC):
     """
 
     @abstractmethod
-    def put(self, keys: list[str], values: list[Tensor]) -> None:
+    def put(self, keys: list[str], values: list[Any]) -> Optional[list[Any]]:
+        """
+        Store key-value pairs in the storage backend.
+        Args:
+            keys (list[str]): List of keys to store.
+            values (list[Any]): List of any type to store.
+        Returns:
+            Optional[list[Any]]: Optional list of custom metadata from each storage backend.
+        """
         raise NotImplementedError("Subclasses must implement put")
 
     @abstractmethod
-    def get(self, keys: list[str], shapes=None, dtypes=None) -> list[Tensor]:
+    def get(self, keys: list[str], shapes=None, dtypes=None, custom_meta=None) -> list[Any]:
+        """
+        Retrieve values from the storage backend by key.
+        Args:
+            keys (list[str]): List of keys whose values should be retrieved.
+            shapes: Optional shape information for the expected values. The
+                structure and interpretation of this argument are determined
+                by the concrete storage backend implementation.
+            dtypes: Optional data type information for the expected values.
+                The structure and interpretation of this argument are
+                determined by the concrete storage backend implementation.
+            custom_meta: Optional backend-specific metadata used to control
+                or optimize the retrieval process. Its format is defined by
+                the concrete storage backend implementation.
+        Returns:
+            list[Any]: List of values retrieved from the storage backend,
+            in the same order as the provided keys.
+        """
         raise NotImplementedError("Subclasses must implement get")
 
     @abstractmethod

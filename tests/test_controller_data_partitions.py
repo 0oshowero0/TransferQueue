@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
@@ -63,6 +65,7 @@ def test_data_partition_status():
             1: {"input_ids": (512,), "attention_mask": (512,)},
             2: {"input_ids": (512,), "attention_mask": (512,)},
         },
+        custom_meta=None,
     )
 
     assert success
@@ -172,6 +175,7 @@ def test_dynamic_expansion_scenarios():
             5: {"field_1": (32,)},
             10: {"field_1": (32,)},
         },
+        custom_meta=None,
     )
     assert partition.total_samples_num == 3
     assert partition.allocated_samples_num >= 11  # Should accommodate index 10
@@ -180,7 +184,7 @@ def test_dynamic_expansion_scenarios():
     # Scenario 2: Adding many fields dynamically
     for i in range(15):
         partition.update_production_status(
-            [0], [f"field_{i}"], {0: {f"field_{i}": "torch.bool"}}, {0: {f"field_{i}": (32,)}}
+            [0], [f"field_{i}"], {0: {f"field_{i}": "torch.bool"}}, {0: {f"field_{i}": (32,)}}, None
         )
 
     assert partition.total_fields_num == 16  # Original + 15 new fields
@@ -222,7 +226,7 @@ def test_data_partition_status_advanced():
     # Add data to trigger expansion
     dtypes = {i: {f"dynamic_field_{s}": "torch.bool" for s in ["a", "b", "c"]} for i in range(5)}
     shapes = {i: {f"dynamic_field_{s}": (32,) for s in ["a", "b", "c"]} for i in range(5)}
-    partition.update_production_status([0, 1, 2, 3, 4], ["field_a", "field_b", "field_c"], dtypes, shapes)
+    partition.update_production_status([0, 1, 2, 3, 4], ["field_a", "field_b", "field_c"], dtypes, shapes, None)
 
     # Properties should reflect current state
     assert partition.total_samples_num >= 5  # At least 5 samples
@@ -253,7 +257,7 @@ def test_data_partition_status_advanced():
         11: {"field_d": (32,)},
         12: {"field_d": (32,)},
     }
-    partition.update_production_status([10, 11, 12], ["field_d"], dtypes, shapes)  # Triggers sample expansion
+    partition.update_production_status([10, 11, 12], ["field_d"], dtypes, shapes, None)  # Triggers sample expansion
     expanded_consumption = partition.get_consumption_status(task_name)
     assert expanded_consumption[0] == 1  # Preserved
     assert expanded_consumption[1] == 1  # Preserved
@@ -265,13 +269,13 @@ def test_data_partition_status_advanced():
     # Start with some fields
     dtypes = {0: {"initial_field": "torch.bool"}}
     shapes = {0: {"field_d": (32,)}}
-    partition.update_production_status([0], ["initial_field"], dtypes, shapes)
+    partition.update_production_status([0], ["initial_field"], dtypes, shapes, None)
 
     # Add many fields to trigger column expansion
     new_fields = [f"dynamic_field_{i}" for i in range(20)]
     dtypes = {1: {f"dynamic_field_{i}": "torch.bool" for i in range(20)}}
     shapes = {1: {f"dynamic_field_{i}": (32,) for i in range(20)}}
-    partition.update_production_status([1], new_fields, dtypes, shapes)
+    partition.update_production_status([1], new_fields, dtypes, shapes, None)
 
     # Verify all fields are registered and accessible
     assert "initial_field" in partition.field_name_mapping
@@ -441,3 +445,84 @@ def test_performance_characteristics():
     print("✓ Memory usage patterns reasonable")
 
     print("Performance characteristics tests passed!\n")
+
+
+def test_custom_meta_in_data_partition_status():
+    """Simplified tests for custom_meta functionality in DataPartitionStatus."""
+
+    print("Testing simplified custom_meta in DataPartitionStatus...")
+
+    from transfer_queue.controller import DataPartitionStatus
+
+    partition = DataPartitionStatus(partition_id="custom_meta_test")
+
+    # Basic custom_meta storage via update_production_status
+    global_indices = [0, 1, 2]
+    field_names = ["input_ids", "attention_mask"]
+    dtypes = {i: {"input_ids": "torch.int32", "attention_mask": "torch.bool"} for i in global_indices}
+    shapes = {i: {"input_ids": (512,), "attention_mask": (512,)} for i in global_indices}
+    custom_meta = {
+        0: {"input_ids": {"token_count": 100}},
+        1: {"attention_mask": {"mask_ratio": 0.2}},
+        2: {"input_ids": {"token_count": 300}},
+    }
+
+    success = partition.update_production_status(
+        global_indices=global_indices,
+        field_names=field_names,
+        dtypes=dtypes,
+        shapes=shapes,
+        custom_meta=custom_meta,
+    )
+
+    assert success
+
+    # Verify some stored values
+    assert partition.field_custom_metas[0]["input_ids"]["token_count"] == 100
+    assert partition.field_custom_metas[1]["attention_mask"]["mask_ratio"] == 0.2
+
+    # Retrieval via helper for a subset of fields
+    retrieved = partition.get_field_custom_meta([0, 1], ["input_ids", "attention_mask"])
+    assert 0 in retrieved and "input_ids" in retrieved[0]
+    assert 1 in retrieved and "attention_mask" in retrieved[1]
+
+    # Clearing a sample should remove its custom_meta
+    partition.clear_data([0], clear_consumption=True)
+    assert 0 not in partition.field_custom_metas
+
+    print("✓ Custom_meta tests passed")
+
+
+def test_update_field_metadata_variants():
+    """Test _update_field_metadata handles dtypes/shapes/custom_meta being optional and merging."""
+    from transfer_queue.controller import DataPartitionStatus
+
+    partition = DataPartitionStatus(partition_id="update_meta_test")
+
+    # Only dtypes provided
+    global_indices = [0, 1]
+    dtypes = {0: {"f1": "torch.int32"}, 1: {"f1": "torch.bool"}}
+
+    partition._update_field_metadata(global_indices, dtypes, shapes=None, custom_meta=None)
+    assert partition.field_dtypes[0]["f1"] == "torch.int32"
+    assert partition.field_dtypes[1]["f1"] == "torch.bool"
+    assert partition.field_shapes == {}
+    assert partition.field_custom_metas == {}
+
+    # Only shapes provided for a new index
+    partition._update_field_metadata([2], dtypes=None, shapes={2: {"f2": (16,)}}, custom_meta=None)
+    assert partition.field_shapes[2]["f2"] == (16,)
+
+    # Only custom_meta provided and merged with existing entries
+    partition._update_field_metadata([2], dtypes=None, shapes=None, custom_meta={2: {"f2": {"meta": 1}}})
+    assert 2 in partition.field_custom_metas
+    assert partition.field_custom_metas[2]["f2"]["meta"] == 1
+
+    # Merging dtypes on an existing index should preserve previous keys
+    partition._update_field_metadata([0], dtypes={0: {"f2": "torch.float32"}}, shapes=None, custom_meta=None)
+    assert partition.field_dtypes[0]["f1"] == "torch.int32"
+    assert partition.field_dtypes[0]["f2"] == "torch.float32"
+
+    # Length mismatch should raise ValueError when provided mapping lengths differ from global_indices
+    with pytest.raises(ValueError):
+        partition._update_field_metadata([0, 1, 2], dtypes={0: {}}, shapes=None, custom_meta=None)
