@@ -137,7 +137,7 @@ class RankAwareSampler(BaseSampler):
 
         else:
             # Return the cached indices (identical to what first rank received)
-            sampled_indexes = self._states[partition_id][task_name][data_replica_group][data_replica_rank].pop()
+            sampled_indexes = self._states[partition_id][task_name][data_replica_group][data_replica_rank].pop(0)
             consumed_indexes = sampled_indexes
 
         return sampled_indexes, consumed_indexes
