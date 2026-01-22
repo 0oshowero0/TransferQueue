@@ -48,15 +48,18 @@ class RankAwareSampler(BaseSampler):
         within the same DP group. This state tracks which samples have been sampled
         and how many times they have been fetched.
         """
+
         super().__init__()
 
     def sample(
         self,
         ready_indexes: list[int],
         batch_size: int,
-        dp_group: int,
-        dp_world_size: int,
-        world_size: int,
+        data_replica_group: int,
+        data_replica_rank: int,
+        data_replica_world_size: int,
+        task_name: str,
+        partition_id: str,
         *args: Any,
         **kwargs: Any,
     ) -> tuple[list[int], list[int]]:
@@ -67,66 +70,74 @@ class RankAwareSampler(BaseSampler):
         from ``ready_indexes`` and caches the result. Subsequent ranks in the same
         DP group receive the cached indices directly.
 
+        Internal state structure (self._states):
+
+        .. code-block:: python
+
+            self._states = {
+                "partition_id": {
+                    "task_name": {
+                        data_replica_group: {
+                            data_replica_rank: [sampled_indexes]  # Cached sampled indices
+                        }
+                    }
+                }
+            }
+
+        State lifecycle:
+        1. First rank samples from ``ready_indexes``, caches results for other ranks
+        2. Other ranks pop and retrieve the cached indices
+
         Args:
             ready_indexes: List of global indices for which all required fields of the
                 corresponding samples have been produced, and the samples are not labeled
                 as consumed in the corresponding task.
             batch_size: Number of samples to select. If larger than available
                 ready samples, all available samples will be returned.
-            dp_group: The group id of current data parallel group. Used to
-                identify which DP group this rank belongs to.
-            dp_world_size: Number of ranks in the data parallelism group. Used to
-                determine when all ranks have fetched their samples.
-            world_size: Total number of ranks across all parallelism dimensions.
-                Used to determine when all ranks have fetched their samples.
+            data_replica_group: The group id of current data replica group. Used to
+                identify which data replica group this rank belongs to.
+            data_replica_rank: Local rank inside this data_replica_group.
+            data_replica_world_size: Total number of ranks in this data_replica_group.
+            task_name: Identifier for the task.
+            partition_id: Partition ID for data management.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
 
         Returns:
-            List of sampled global indices. Typically, has length `batch_size`,
-            or returns an empty list if samples are insufficient.
+            Tuple of two lists:
+            - List of sampled global indices. Typically, has length ``batch_size``,
+              or empty if samples are insufficient.
+            - List of global indices to mark as consumed (excluded from future
+              retrieval by other data_replica_groups).
 
-            List of global indices that should be labeled as consumed
-            (will never be retrieved by other dp_groups in the future).
-
-        Raises:
-            RuntimeError: If ``world_size`` is not divisible by ``dp_world_size``.
         """
 
-        # Check if this DP group already has sampled data cached
-        data_for_dp_group = self._states.get(dp_group, None)
+        if partition_id not in self._states:
+            self._states[partition_id] = {}
 
-        # Calculate how many times this batch should be fetched across all ranks
-        if dp_world_size <= 0 or world_size % dp_world_size != 0:
-            raise RuntimeError(f"world_size ({world_size}) is not divisible by dp_world_size ({dp_world_size})")
+        if task_name not in self._states[partition_id]:
+            self._states[partition_id][task_name] = {}
 
-        fetches_per_batch = world_size // dp_world_size
+        if data_replica_group not in self._states[partition_id][task_name]:
+            self._states[partition_id][task_name][data_replica_group] = {i: [] for i in range(data_replica_world_size)}
 
-        if data_for_dp_group is None:
+        if len(self._states[partition_id][task_name][data_replica_group][data_replica_rank]) == 0:
             # Select first batch_size indices from ready_indexes
             sampled_indexes = ready_indexes[:batch_size]
 
             if len(sampled_indexes) < batch_size:
                 return [], []
 
-            # Initialize state for this DP group
-            self._states[dp_group] = {}
             consumed_indexes = sampled_indexes
 
-            # Cache the sampled indices for other ranks in this DP group
-            self._states[dp_group]["index"] = sampled_indexes
-            self._states[dp_group]["fetch_count"] = 1
+            # Cache the sampled indices for other ranks in this data replica group
+            for i in range(data_replica_world_size):
+                if i != data_replica_rank:
+                    self._states[partition_id][task_name][data_replica_group][i].append(sampled_indexes)
 
         else:
             # Return the cached indices (identical to what first rank received)
-            sampled_indexes = self._states[dp_group]["index"]
-            consumed_indexes = self._states[dp_group]["index"]
-
-            # Increment fetch count to track progress
-            self._states[dp_group]["fetch_count"] += 1
-
-        # Check if this was the last rank in the DP group to fetch
-        if self._states[dp_group]["fetch_count"] >= fetches_per_batch:
-            del self._states[dp_group]
+            sampled_indexes = self._states[partition_id][task_name][data_replica_group][data_replica_rank].pop()
+            consumed_indexes = sampled_indexes
 
         return sampled_indexes, consumed_indexes
