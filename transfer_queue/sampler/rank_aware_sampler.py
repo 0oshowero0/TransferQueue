@@ -44,7 +44,7 @@ class RankAwareSampler(BaseSampler):
         """Initialize the RankAwareSampler.
 
         The sampler maintains internal state to coordinate sampling across ranks
-        within the same DP group. This state tracks which samples have been sampled
+        within the same data replica group. This state tracks which samples have been sampled
         and how many times they have been fetched.
         """
 
@@ -62,12 +62,30 @@ class RankAwareSampler(BaseSampler):
         *args: Any,
         **kwargs: Any,
     ) -> tuple[list[int], list[int]]:
-        """Sample indices for the current rank, coordinating with other DP ranks.
+        """Sample indices for the current rank, coordinating with other data replica ranks.
 
         This method implements coordinated sampling for distributed training.
-        The first rank in each DP group to call this method performs actual sampling
+        The first rank in each data replica group to call this method performs actual sampling
         from ``ready_indexes`` and caches the result. Subsequent ranks in the same
-        DP group receive the cached indices directly.
+        data replica group receive the cached indices directly.
+
+        Internal state structure (self._states):
+
+        .. code-block:: python
+
+            self._states = {
+                "partition_id": {
+                    "task_name": {
+                        data_replica_group: {
+                            data_replica_rank: [[sampled_indexes], ...]  # Buffer of cached sampled indices
+                        }
+                    }
+                }
+            }
+
+        State lifecycle:
+        1. First rank samples from ``ready_indexes``, caches results for other ranks
+        2. Other ranks pop and retrieve the cached indices
 
         Internal state structure (self._states):
 
