@@ -458,7 +458,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
@@ -480,7 +480,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
@@ -491,7 +491,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=1,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
@@ -500,8 +500,8 @@ class TestRankAwareSampler:
         assert consumed2 == [0, 1, 2]
 
         # cache should be empty after all ranks fetch
-        assert len(sampler._states["test"]["test"][0][0]) == 0
-        assert len(sampler._states["test"]["test"][0][1]) == 0
+        assert len(sampler._states["test"]["task"][0][0]) == 0
+        assert len(sampler._states["test"]["task"][0][1]) == 0
 
     def test_rank_aware_sampler_multiple_dp_groups(self):
         """Test that multiple data replica groups work independently."""
@@ -517,7 +517,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=data_replica_world_size,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         # mimic the consumption status update managed in TransferQueueController
@@ -530,7 +530,7 @@ class TestRankAwareSampler:
             data_replica_group=1,
             data_replica_rank=0,
             data_replica_world_size=data_replica_world_size,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         ready_indexes = [i for i in ready_indexes if i not in consumed0_g1]
@@ -548,7 +548,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=1,
             data_replica_world_size=data_replica_world_size,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         ready_indexes = [i for i in ready_indexes if i not in consumed1_g0]
@@ -562,7 +562,7 @@ class TestRankAwareSampler:
             data_replica_group=1,
             data_replica_rank=1,
             data_replica_world_size=data_replica_world_size,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         ready_indexes = [i for i in ready_indexes if i not in consumed1_g1]
@@ -576,7 +576,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=data_replica_world_size,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         ready_indexes = [i for i in ready_indexes if i not in consumed2_g0]
@@ -590,17 +590,17 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=1,
             data_replica_world_size=data_replica_world_size,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         assert sampled3_g0 == [4, 5]
         assert consumed3_g0 == [4, 5]
 
         # examine the internal state to ensure proper caching and clearing
-        assert len(sampler._states["test"]["test"][0][0]) == 0
-        assert len(sampler._states["test"]["test"][0][1]) == 0
-        assert len(sampler._states["test"]["test"][1][0]) == 0
-        assert len(sampler._states["test"]["test"][1][1]) == 0
+        assert len(sampler._states["test"]["task"][0][0]) == 0
+        assert len(sampler._states["test"]["task"][0][1]) == 0
+        assert len(sampler._states["test"]["task"][1][0]) == 0
+        assert len(sampler._states["test"]["task"][1][1]) == 0
 
     def test_rank_aware_sampler_empty_ready_indexes(self):
         """Test behavior with empty ready indexes."""
@@ -614,7 +614,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
@@ -633,7 +633,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
@@ -652,7 +652,7 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
@@ -671,14 +671,14 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
         assert sampled_rank0_time0 == [0, 1]
         assert consumed_rank0_time0 == [0, 1]
-        assert sampler._states["test"]["test"][0][0] == []
-        assert sampler._states["test"]["test"][0][1] == [[0, 1]]
+        assert sampler._states["test"]["task"][0][0] == []
+        assert sampler._states["test"]["task"][0][1] == [[0, 1]]
 
         ready_indexes = [i for i in ready_indexes if i not in consumed_rank0_time0]
 
@@ -688,14 +688,14 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=0,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
 
         assert sampled_rank0_time1 == [2, 3]
         assert consumed_rank0_time1 == [2, 3]
-        assert sampler._states["test"]["test"][0][0] == []
-        assert sampler._states["test"]["test"][0][1] == [[0, 1], [2, 3]]
+        assert sampler._states["test"]["task"][0][0] == []
+        assert sampler._states["test"]["task"][0][1] == [[0, 1], [2, 3]]
 
         ready_indexes = [i for i in ready_indexes if i not in consumed_rank0_time1]
 
@@ -705,15 +705,15 @@ class TestRankAwareSampler:
             data_replica_group=0,
             data_replica_rank=1,
             data_replica_world_size=2,
-            task_name="test",
+            task_name="task",
             partition_id="test",
         )
         assert sampled_rank1_time0 == [0, 1]
         assert consumed_rank1_time0 == [0, 1]
         ready_indexes = [i for i in ready_indexes if i not in consumed_rank1_time0]
 
-        assert sampler._states["test"]["test"][0][0] == []
-        assert sampler._states["test"]["test"][0][1] == [[2, 3]]
+        assert sampler._states["test"]["task"][0][0] == []
+        assert sampler._states["test"]["task"][0][1] == [[2, 3]]
 
     def test_rank_aware_sampler_multiple_tasks(self):
         """Test behavior with multiple tasks."""
