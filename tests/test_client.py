@@ -112,18 +112,20 @@ class MockController:
                         # Mock partition metadata response
                         response_body = {"metadata": self._mock_batch_meta(request_msg.body)}
                         response_type = ZMQRequestType.GET_PARTITION_META_RESPONSE
-                    elif request_msg.request_type == ZMQRequestType.CHECK_CONSUMPTION:
+                    elif request_msg.request_type == ZMQRequestType.GET_CONSUMPTION:
                         # Mock consumption status check - all consumed
                         response_body = {
                             "partition_id": request_msg.body.get("partition_id"),
-                            "consumed": True,
+                            "global_index": torch.tensor([0,1,2]),
+                            "consumption_status": torch.tensor([1,1,1]),
                         }
                         response_type = ZMQRequestType.CONSUMPTION_RESPONSE
-                    elif request_msg.request_type == ZMQRequestType.CHECK_PRODUCTION:
+                    elif request_msg.request_type == ZMQRequestType.GET_PRODUCTION:
                         # Mock production status check - all produced
                         response_body = {
                             "partition_id": request_msg.body.get("partition_id"),
-                            "produced": True,
+                            "global_index": torch.tensor([0,1,2]),
+                            "production_status": torch.tensor([[1,1,1],[1,1,1]]),
                         }
                         response_type = ZMQRequestType.PRODUCTION_RESPONSE
                     elif request_msg.request_type == ZMQRequestType.GET_LIST_PARTITIONS:

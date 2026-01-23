@@ -570,7 +570,7 @@ class AsyncTransferQueueClient:
 
         assert socket is not None
         request_msg = ZMQMessage.create(
-            request_type=ZMQRequestType.CHECK_CONSUMPTION,
+            request_type=ZMQRequestType.GET_CONSUMPTION,
             sender_id=self.client_id,
             receiver_id=self._controller.id,
             body={
@@ -891,6 +891,31 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
         return asyncio.run(self.async_check_consumption_status(task_name, partition_id))
 
+    def get_consumption_status(
+        self,
+        task_name: str,
+        partition_id: str,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Synchronously get consumption status for a specific task and partition.
+
+        Args:
+            task_name: Name of the task to check consumption for
+            partition_id: Partition id to check consumption status for
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Consumption status tensor for the specified task. 1 for consumed, 0 for not consumed.
+
+        Example:
+            >>> global_index, consumption_status = client.get_consumption_status(
+            ...     task_name="generate_sequences",
+            ...     partition_id="train_0"
+            ... )
+            >>> print(f"Global index: {global_index}, Consumption status: {consumption_status}")
+        """
+        return asyncio.run(self.async_get_consumption_status(task_name, partition_id))
+
     def check_production_status(self, data_fields: list[str], partition_id: str) -> bool:
         """Synchronously check if all samples for a partition are ready (produced) for consumption.
 
@@ -902,6 +927,31 @@ class TransferQueueClient(AsyncTransferQueueClient):
             bool: True if all samples have been produced and ready, False otherwise
         """
         return asyncio.run(self.async_check_production_status(data_fields, partition_id))
+
+    def get_production_status(
+        self,
+        data_fields: list[str],
+        partition_id: str,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Synchronously get production status for a specific data fields and partition.
+
+        Args:
+            data_fields: Data fields to check production status for
+            partition_id: Partition id to check production status for
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Production status tensor for the specified task. 1 for ready, 0 for not ready.
+
+        Example:
+            >>> global_index, production_status = client.get_production_status(
+            ...     data_fields=["input_ids", "attention_mask"],
+            ...     partition_id="train_0"
+            ... )
+            >>> print(f"Global index: {global_index}, Production status: {production_status}")
+        """
+        return asyncio.run(self.async_get_production_status(data_fields, partition_id))
 
     def get_partition_list(
         self,
