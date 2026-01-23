@@ -16,13 +16,10 @@
 
 # This implementation is inspired by https://github.com/vllm-project/vllm/blob/main/vllm/v1/serial_utils.py
 
-import itertools
-import logging
-import os
+
 import pickle
 import warnings
 from collections.abc import Sequence
-from inspect import isclass
 from types import FunctionType
 from typing import Any, Optional, TypeAlias
 
@@ -31,27 +28,15 @@ import numpy as np
 import torch
 import zmq
 from msgspec import msgpack
+from tensordict import TensorDictBase
 
-from transfer_queue.utils.utils import get_env_bool
-
-try:
-    from torch.distributed.rpc.internal import _internal_rpc_pickler
-
-    HAS_RPC_PICKLER = True
-except ImportError:
-    HAS_RPC_PICKLER = False
 
 CUSTOM_TYPE_PICKLE = 1
 CUSTOM_TYPE_CLOUDPICKLE = 2
-CUSTOM_TYPE_RAW_VIEW = 3
-
-TQ_ZERO_COPY_SERIALIZATION = get_env_bool("TQ_ZERO_COPY_SERIALIZATION", default=False) and HAS_RPC_PICKLER
+CUSTOM_TYPE_TENSOR = 3  # For tensor with buffer reference
+CUSTOM_TYPE_NESTED_TENSOR = 4  # For nested tensor (strided or jagged)
 
 bytestr: TypeAlias = bytes | bytearray | memoryview | zmq.Frame
-tensorenc = tuple[str, tuple[int, ...], int | memoryview]
-
-logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 # Ignore warnings about non-writable buffers from torch.frombuffer. Upper codes will ensure
 # the tensors are writable to users.
@@ -97,26 +82,131 @@ class MsgpackEncoder:
             self.aux_buffers = None
 
     def enc_hook(self, obj: Any) -> Any:
+        """Custom encoding hook for types msgspec doesn't natively support.
+
+        For zero-copy tensor serialization, we need to handle:
+        - torch.Tensor: Extract buffer, store metadata
+        - TensorDict: Convert to dict structure for recursive processing
+        - numpy.ndarray: Convert to tensor for unified handling
+        """
         if isinstance(obj, torch.Tensor):
             return self._encode_tensor(obj)
 
+        # Handle TensorDict explicitly for recursive zero-copy
+        if isinstance(obj, TensorDictBase):
+            return self._encode_tensordict(obj)
+        
+
+        # Handle numpy arrays by converting to tensor
+        if isinstance(obj, np.ndarray):
+            return self._encode_tensor(torch.from_numpy(obj))
+
         if isinstance(obj, FunctionType):
-            # `pickle` is generally faster than cloudpickle, but can have
-            # problems serializing methods.
+            # cloudpickle for functions/methods
             return msgpack.Ext(CUSTOM_TYPE_CLOUDPICKLE, cloudpickle.dumps(obj))
 
+        # Fallback to pickle for unknown types
         return msgpack.Ext(CUSTOM_TYPE_PICKLE, pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
 
-    def _encode_tensor(self, obj: torch.Tensor) -> tuple[str, list[tensorenc]] | tensorenc:
+    def _encode_tensordict(self, obj: Any) -> dict:
+        """Convert TensorDict to a dict structure for recursive msgpack processing.
+
+        This allows msgpack to recursively call enc_hook for each tensor inside,
+        enabling zero-copy serialization of nested tensors.
+        """
+        # Convert to dict, preserving structure
+        # TensorDict.to_dict() returns nested dicts with tensors as leaves
+        data_dict = dict(obj.items())
+
+        # Return a marked dict that decoder will recognize
+        return {
+            "__tq_tensordict__": True,
+            "batch_size": list(obj.batch_size),  # torch.Size -> list for msgpack
+            "data": data_dict,
+        }
+
+    def _encode_tensor(self, obj: torch.Tensor) -> msgpack.Ext:
+        """Encode tensor with zero-copy buffer extraction.
+
+        Features:
+        - Auto GPU->CPU conversion
+        - Auto contiguous conversion
+        - Direct memoryview extraction via uint8 view (for BFloat16 support)
+        - Nested tensors: unbind and serialize each sub-tensor with zero-copy
+
+        Returns Ext type so decoding goes through ext_hook (which has buffer access).
+        """
         assert self.aux_buffers is not None
-        assert obj.device.type == "cpu", f"MsgpackEncoder only supports CPU tensors, got {obj.device}"
-        assert not obj.is_sparse, "Sparse tensors are not supported yet for MsgpackEncoder."
-        # view the tensor as a contiguous 1D array of bytes
-        arr = obj.flatten().contiguous().view(torch.uint8).numpy()
-        data = len(self.aux_buffers)
-        self.aux_buffers.append(arr.data)
+
+        # Handle nested tensors (strided or jagged) via unbind
+        if obj.is_nested:
+            return self._encode_nested_tensor(obj)
+
+        return self._encode_regular_tensor(obj)
+
+    def _encode_nested_tensor(self, obj: torch.Tensor) -> msgpack.Ext:
+        """Encode nested tensor by unbinding into sub-tensors for zero-copy."""
+        # Unbind nested tensor into list of regular tensors
+        sub_tensors = obj.unbind()
+
+        # Encode each sub-tensor with zero-copy
+        encoded_sub_tensors = []
+        for t in sub_tensors:
+            # Get tensor metadata (dtype, shape, buffer_idx)
+            meta = self._encode_regular_tensor_meta(t)
+            encoded_sub_tensors.append(meta)
+
+        # Pack: layout type + list of tensor metas
+        layout = "jagged" if obj.layout == torch.jagged else "strided"
+        nested_meta = {
+            "layout": layout,
+            "tensors": encoded_sub_tensors,
+        }
+        return msgpack.Ext(CUSTOM_TYPE_NESTED_TENSOR, pickle.dumps(nested_meta, protocol=pickle.HIGHEST_PROTOCOL))
+
+    def _encode_regular_tensor_meta(self, obj: torch.Tensor) -> tuple:
+        """Encode a regular tensor and return its metadata tuple."""
+        # Handle non-contiguous tensors
+        if not obj.is_contiguous():
+            obj = obj.contiguous()
+
+        # Handle GPU tensors
+        if obj.device.type != 'cpu':
+            obj = obj.cpu()
+
+        # Zero-copy buffer extraction via uint8 view
+        arr = obj.flatten().view(torch.uint8).numpy()
+        buf = memoryview(arr)
+        idx = len(self.aux_buffers)
+        self.aux_buffers.append(buf)
+
         dtype = str(obj.dtype).removeprefix("torch.")
-        return dtype, obj.shape, data
+        return (dtype, tuple(obj.shape), idx)
+
+    def _encode_regular_tensor(self, obj: torch.Tensor) -> msgpack.Ext:
+        """Encode a regular (non-nested) tensor with zero-copy."""
+        # Handle non-contiguous tensors
+        if not obj.is_contiguous():
+            obj = obj.contiguous()
+
+        # Handle GPU tensors
+        if obj.device.type != 'cpu':
+            obj = obj.cpu()
+
+        if obj.is_sparse:
+            # Sparse tensors fallback to pickle
+            return msgpack.Ext(CUSTOM_TYPE_PICKLE, pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
+
+        # Note: view(uint8) is a byte-level view, NOT a value conversion.
+        arr = obj.flatten().view(torch.uint8).numpy()
+        buf = memoryview(arr)
+        idx = len(self.aux_buffers)
+        self.aux_buffers.append(buf)
+
+        # Pack tensor metadata as Ext type
+        dtype = str(obj.dtype).removeprefix("torch.")
+        meta = (dtype, tuple(obj.shape), idx)
+        return msgpack.Ext(CUSTOM_TYPE_TENSOR, pickle.dumps(meta, protocol=pickle.HIGHEST_PROTOCOL))
 
 
 class MsgpackDecoder:
@@ -126,167 +216,93 @@ class MsgpackDecoder:
     not thread-safe when encoding tensors / numpy arrays.
     """
 
-    def __init__(self, t: Optional[Any] = None):
-        args = () if t is None else (t,)
-        self.decoder = msgpack.Decoder(*args, ext_hook=self.ext_hook, dec_hook=self.dec_hook)
+    def __init__(self):
+        self.decoder = msgpack.Decoder(ext_hook=self.ext_hook)
         self.aux_buffers: Sequence[bytestr] = ()
 
     def decode(self, bufs: bytestr | Sequence[bytestr]) -> Any:
         if isinstance(bufs, bytestr):
-            return self.decoder.decode(bufs)
+            result = self.decoder.decode(bufs)
+        else:
+            self.aux_buffers = bufs
+            try:
+                result = self.decoder.decode(bufs[0])  # type: ignore[index]
+            finally:
+                self.aux_buffers = ()
 
-        self.aux_buffers = bufs
-        try:
-            return self.decoder.decode(bufs[0])  # type: ignore[index]
-        finally:
-            self.aux_buffers = ()
+        # Post-process to reconstruct TensorDict from marked dicts
+        return self._reconstruct_special_types(result)
 
-    def dec_hook(self, t: type, obj: Any) -> Any:
-        # Given native types in `obj`, convert to type `t`.
-        if isclass(t):
-            if issubclass(t, torch.Tensor):
-                return self._decode_tensor(obj)
+    def _reconstruct_special_types(self, obj: Any) -> Any:
+        """Recursively reconstruct special types (TensorDict) from their dict representation."""
+        if isinstance(obj, dict):
+            # Check if this is a TensorDict marker
+            if obj.get("__tq_tensordict__"):
+                return self._reconstruct_tensordict(obj)
+            # Recursively process dict values
+            return {k: self._reconstruct_special_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._reconstruct_special_types(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._reconstruct_special_types(item) for item in obj)
         return obj
 
-    def _decode_tensor(self, arr: Any) -> torch.Tensor:
-        dtype, shape, data = arr
-        # Copy from inline representation, to decouple the memory storage
-        # of the message from the original buffer. And also make Torch
-        # not complain about a readonly memoryview.
-        buffer = self.aux_buffers[data] if isinstance(data, int) else bytearray(data)
+    def _reconstruct_tensordict(self, obj: dict) -> Any:
+        """Reconstruct TensorDict from marked dict structure."""
+        try:
+            from tensordict import TensorDict
+            batch_size = obj["batch_size"]
+            data = obj["data"]
+            # Recursively process nested data
+            processed_data = self._reconstruct_special_types(data)
+            return TensorDict(processed_data, batch_size=batch_size)
+        except ImportError:
+            # If tensordict not available, return as dict
+            return obj
+
+    def _decode_tensor(self, meta: tuple) -> torch.Tensor:
+        """Decode tensor from (dtype, shape, buffer_idx) tuple."""
+        dtype, shape, idx = meta
+        buffer = self.aux_buffers[idx]
         torch_dtype = getattr(torch, dtype)
-        assert isinstance(torch_dtype, torch.dtype)
-        if not buffer:  # torch.frombuffer doesn't like empty buffers
-            assert 0 in shape
+
+        if not buffer:  # Handle empty tensors
             return torch.empty(shape, dtype=torch_dtype)
-        # Create uint8 array. Upper codes should make sure the tensor is cloned so it has their own lifetime and
-        # become writable to users.
+
+        # Create uint8 tensor from buffer, then view as original dtype and reshape
         arr = torch.frombuffer(buffer, dtype=torch.uint8)
         # Convert back to proper shape & type
         return arr.view(torch_dtype).view(shape)
 
+    def _decode_nested_tensor(self, nested_meta: dict) -> torch.Tensor:
+        """Decode nested tensor from serialized sub-tensors."""
+        layout = nested_meta["layout"]
+        tensor_metas = nested_meta["tensors"]
+
+        # Decode each sub-tensor
+        sub_tensors = [self._decode_tensor(meta) for meta in tensor_metas]
+
+        # Reconstruct nested tensor with appropriate layout
+        if layout == "jagged":
+            return torch.nested.as_nested_tensor(sub_tensors, layout=torch.jagged)
+        else:  # strided
+            return torch.nested.as_nested_tensor(sub_tensors, layout=torch.strided)
+
     def ext_hook(self, code: int, data: memoryview) -> Any:
-        if code == CUSTOM_TYPE_RAW_VIEW:
-            return data
         if code == CUSTOM_TYPE_PICKLE:
             return pickle.loads(data)
         if code == CUSTOM_TYPE_CLOUDPICKLE:
             return cloudpickle.loads(data)
+        if code == CUSTOM_TYPE_TENSOR:
+            meta = pickle.loads(data)
+            return self._decode_tensor(meta)
+        if code == CUSTOM_TYPE_NESTED_TENSOR:
+            nested_meta = pickle.loads(data)
+            return self._decode_nested_tensor(nested_meta)
 
         raise NotImplementedError(f"Extension type code {code} is not supported")
 
 
 _encoder = MsgpackEncoder()
-_decoder = MsgpackDecoder(torch.Tensor)
+_decoder = MsgpackDecoder()
 
-
-# Process tensors and collect nested tensor info efficiently
-def _process_tensor(tensor: torch.Tensor) -> Any:
-    if tensor.is_nested and tensor.layout == torch.strided:
-        tensor_list = tensor.unbind()
-        tensor_count = len(tensor_list)
-        serialized_tensors = [_encoder.encode(inner_tensor) for inner_tensor in tensor_list]
-        return tensor_count, serialized_tensors  # tensor_count may equal to 1 for single nested tensor
-    else:
-        return -1, [_encoder.encode(tensor)]  # use -1 to indicate regular single tensor
-
-
-def serialization(obj: Any) -> list[bytestr]:
-    """
-    Serializes any object.
-
-    Returns:
-        list[bytestr]: If TQ_ZERO_COPY_SERIALIZATION is enabled, returns a list where the first element
-        is the pickled bytes of the message, followed by the flattened serialized tensor parts as
-        [pickled_bytes, <bytes>, |<bytes>, <memoryview>, |<bytes>, <memoryview>|...].
-        From the third element, two elements is a group that will be used to restore a tensor.
-
-        If TQ_ZERO_COPY_SERIALIZATION is disabled, returns a single-element list containing only the pickled bytes
-        through pickle.
-    """
-
-    logger.debug(f"Serializing an obj with TQ_ZERO_COPY_SERIALIZATION={TQ_ZERO_COPY_SERIALIZATION}")
-
-    if TQ_ZERO_COPY_SERIALIZATION:
-        pickled_bytes, tensors = _internal_rpc_pickler.serialize(obj)
-
-        # Use map to process all tensors in parallel-like fashion
-        nested_tensor_info_and_serialized_tensors = list(map(_process_tensor, tensors))
-
-        # Extract nested_tensor_info and flatten serialized tensors using itertools
-        nested_tensor_info = np.array([info for info, _ in nested_tensor_info_and_serialized_tensors])
-        double_layer_serialized_tensors: list[list[bytestr]] = list(
-            itertools.chain.from_iterable(serialized for _, serialized in nested_tensor_info_and_serialized_tensors)
-        )
-        serialized_tensors: list[bytestr] = list(itertools.chain.from_iterable(double_layer_serialized_tensors))
-        return [pickled_bytes, pickle.dumps(nested_tensor_info), *serialized_tensors]
-    else:
-        return [pickle.dumps(obj)]
-
-
-def deserialization(data: list[bytestr] | bytestr) -> Any:
-    """Deserialize any object from serialized data."""
-
-    logger.debug(f"Deserializing an obj with TQ_ZERO_COPY_SERIALIZATION={TQ_ZERO_COPY_SERIALIZATION}")
-
-    if TQ_ZERO_COPY_SERIALIZATION:
-        if isinstance(data, list):
-            # contain tensors
-            pickled_bytes = data[0]
-            nested_tensor_info = pickle.loads(data[1])
-            serialized_tensors = data[2:]
-            if len(serialized_tensors) % 2 != 0:
-                # Note: data is a list of [pickled_bytes, <bytes>, |<bytes>, <memoryview>,
-                # |<bytes>, <memoryview>|...].
-                # From the third element, two elements is a group that will be used to restore a tensor.
-
-                raise ValueError(
-                    f"When TQ_ZERO_COPY_SERIALIZATION is enabled, input data should "
-                    f"be a list containing an even number of elements, but got {len(data)}."
-                )
-            # deserializing each single tensor
-            single_tensors: list[torch.Tensor] = [
-                _decoder.decode(pair) for pair in zip(serialized_tensors[::2], serialized_tensors[1::2], strict=False)
-            ]
-        else:
-            raise ValueError(
-                f"When TQ_ZERO_COPY_SERIALIZATION is enabled, input data should be a list, but got {type(data)}."
-            )
-
-        tensor_nums = np.abs(nested_tensor_info).sum()
-        if tensor_nums != len(single_tensors):
-            raise ValueError(f"Expecting {tensor_nums} tensors, but got {len(single_tensors)}.")
-
-        tensors = [None] * len(nested_tensor_info)
-        current_idx = 0
-        for i, tensor_num in enumerate(nested_tensor_info):
-            if tensor_num == -1:
-                tensors[i] = single_tensors[current_idx]
-                current_idx += 1
-            else:
-                tensors[i] = torch.nested.as_nested_tensor(
-                    single_tensors[current_idx : current_idx + tensor_num], layout=torch.strided
-                )
-                current_idx += tensor_num
-
-        return _internal_rpc_pickler.deserialize(pickled_bytes, tensors)
-    else:
-        if isinstance(data, bytestr):
-            return pickle.loads(data)
-        elif isinstance(data, list):
-            if len(data) > 1:
-                raise ValueError(
-                    f"When TQ_ZERO_COPY_SERIALIZATION is disabled, must have only 1 element in"
-                    f" list for deserialization, but got {len(data)}."
-                )
-            return pickle.loads(data[0])
-        else:
-            raise ValueError(
-                f"When TQ_ZERO_COPY_SERIALIZATION is disabled, input data should be a list of bytestr,"
-                f" but got {type(data)}."
-            )
-
-
-def zero_copy_serialization_enabled() -> bool:
-    """Check if zero-copy serialization is enabled."""
-    return TQ_ZERO_COPY_SERIALIZATION
