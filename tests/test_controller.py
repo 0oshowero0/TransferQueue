@@ -330,7 +330,9 @@ class TestTransferQueueController:
                 data_fields=data_fields,
             )
         )
-        expected_global_index_2 = torch.tensor(range(part1_index_range, part2_index_range + part1_index_range), dtype=torch.long)
+        expected_global_index_2 = torch.tensor(
+            range(part1_index_range, part2_index_range + part1_index_range), dtype=torch.long
+        )
         assert torch.equal(global_index_2, expected_global_index_2)
         expected_production_status_2 = torch.ones(part2_index_range, len(data_fields), dtype=torch.int8)
         assert torch.equal(production_status_2, expected_production_status_2)

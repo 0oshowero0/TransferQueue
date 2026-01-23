@@ -466,7 +466,7 @@ class DataPartitionStatus:
 
     # ==================== Consumption Status Interface ====================
 
-    def get_consumption_status(self, task_name: str, mask:bool=False) -> tuple[Tensor, Tensor]:
+    def get_consumption_status(self, task_name: str, mask: bool = False) -> tuple[Tensor, Tensor]:
         """
         Get or create consumption status for a specific task.
         Handles dynamic expansion when new samples are added.
@@ -498,7 +498,7 @@ class DataPartitionStatus:
         return partition_global_index, consumption_status
 
     # ==================== Production Status Interface ====================
-    def get_production_status_for_fields(self, field_names: list[str], mask:bool=False) -> tuple[Tensor, Tensor]:
+    def get_production_status_for_fields(self, field_names: list[str], mask: bool = False) -> tuple[Tensor, Tensor]:
         """
         Check if all samples for specified fields are fully produced and ready.
 
