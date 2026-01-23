@@ -84,7 +84,7 @@ class StreamingDataset(IterableDataset):
         Args:
             config: Configuration dictionary containing:
                 - controller_info: ZMQServerInfo for the TransferQueueController
-                - storage_backend: Storage backend type (e.g., "SimpleAsyncStorageManager")
+                - storage_backend: Storage backend type (e.g., "AsyncSimpleStorageManager")
                 - Other backend-specific configuration
             micro_batch_size: Number of samples per micro-batch. This is the batch size
                 that will be requested from TransferQueue for each iteration.
@@ -148,7 +148,7 @@ class StreamingDataset(IterableDataset):
             raise ValueError("Missing storage_backend in config")
 
         self._tq_client = TransferQueueClient(client_id, controller_info)
-        self._tq_client.initialize_storage_manager(manager_type=self.config.storage_backend, config=self.config)
+        self._tq_client.initialize_storage_manager(manager_type=storage_backend, config=self.config)
 
     def __iter__(self) -> Iterator[tuple[TensorDict, BatchMeta]]:
         """Iterate over the dataset, yielding batches of data.
