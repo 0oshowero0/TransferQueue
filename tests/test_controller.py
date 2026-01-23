@@ -89,6 +89,7 @@ class TestTransferQueueController:
                 field_names=metadata.field_names,
                 dtypes=dtypes,
                 shapes=shapes,
+                custom_meta=None,
             )
         )
         assert success
@@ -97,13 +98,18 @@ class TestTransferQueueController:
         assert partition.production_status.size(0) == gbs * num_n_samples
 
         # Test for get production status
-        production_status = ray.get(
+        global_index, production_status = ray.get(
             tq_controller.get_production_status.remote(
                 partition_id=partition_id,
                 data_fields=data_fields,
             )
         )
-        assert production_status
+        # Verify global_index contains all expected indexes
+        assert torch.equal(global_index, torch.tensor(range(gbs * num_n_samples), dtype=torch.long))
+        # Verify all samples are produced for all fields (status should be 1)
+        expected_production_status = torch.ones(gbs * num_n_samples, len(metadata.field_names), dtype=torch.int8)
+        assert torch.equal(production_status, expected_production_status)
+        print("✓ Get production status returns correct global_index and production_status")
 
         # Total fields should match the number of fields we added
         assert partition.total_fields_num == len(data_fields)
@@ -126,14 +132,19 @@ class TestTransferQueueController:
 
         print(f"✓ Updated production status for partition {partition_id}")
 
-        # Test for get consumption status
-        consumption_status = ray.get(
+        # Test for get consumption status BEFORE consumption
+        global_index, consumption_status = ray.get(
             tq_controller.get_consumption_status.remote(
                 partition_id=partition_id,
                 task_name="generate_sequences",
             )
         )
-        assert torch.equal(consumption_status, torch.zeros(gbs * num_n_samples))
+        # Verify global_index
+        assert torch.equal(global_index, torch.tensor(range(gbs * num_n_samples), dtype=torch.long))
+        # Verify all samples are NOT consumed yet (status should be 0)
+        expected_consumption_status_before = torch.zeros(gbs * num_n_samples, dtype=torch.int8)
+        assert torch.equal(consumption_status, expected_consumption_status_before)
+        print("✓ Get consumption status returns correct global_index and status (before consumption)")
 
         # Test get metadate in fetch mode
         gen_meta = ray.get(
@@ -153,14 +164,19 @@ class TestTransferQueueController:
         assert torch.equal(partition.consumption_status["generate_sequences"], torch.ones(gbs * num_n_samples))
         print("✓ Get metadata in fetch mode correct")
 
-        # Test for get consumption status
-        consumption_status = ray.get(
+        # Test for get consumption status AFTER consumption
+        global_index, consumption_status = ray.get(
             tq_controller.get_consumption_status.remote(
                 partition_id=partition_id,
                 task_name="generate_sequences",
             )
         )
-        assert torch.equal(consumption_status, torch.ones(gbs * num_n_samples))
+        # Verify global_index
+        assert torch.equal(global_index, torch.tensor(range(gbs * num_n_samples), dtype=torch.long))
+        # Verify all samples are consumed (status should be 1)
+        expected_consumption_status_after = torch.ones(gbs * num_n_samples, dtype=torch.int8)
+        assert torch.equal(consumption_status, expected_consumption_status_after)
+        print("✓ Get consumption status returns correct global_index and status (after consumption)")
 
         # Test get clear meta
         clear_meta = ray.get(
@@ -222,6 +238,19 @@ class TestTransferQueueController:
         )
         assert success
 
+        # Verify get production status returns correct data
+        global_index_1, production_status_1 = ray.get(
+            tq_controller.get_production_status.remote(
+                partition_id=partition_id_1,
+                data_fields=data_fields,
+            )
+        )
+        expected_global_index_1 = torch.tensor(range(gbs_1 * num_n_samples_1), dtype=torch.long)
+        assert torch.equal(global_index_1, expected_global_index_1)
+        expected_production_status_1 = torch.ones(gbs_1 * num_n_samples_1, len(data_fields), dtype=torch.int8)
+        assert torch.equal(production_status_1, expected_production_status_1)
+        print("✓ Get production status for partition_1 returns correct global_index and status")
+
         # Test get metadate in fetch mode
         gen_meta = ray.get(
             tq_controller.get_metadata.remote(
@@ -233,6 +262,18 @@ class TestTransferQueueController:
             )
         )
         assert gen_meta
+
+        # Verify get consumption status after fetch (samples should be consumed)
+        global_index_1_consumed, consumption_status_1 = ray.get(
+            tq_controller.get_consumption_status.remote(
+                partition_id=partition_id_1,
+                task_name="generate_sequences",
+            )
+        )
+        assert torch.equal(global_index_1_consumed, expected_global_index_1)
+        expected_consumption_status_1 = torch.ones(gbs_1 * num_n_samples_1, dtype=torch.int8)
+        assert torch.equal(consumption_status_1, expected_consumption_status_1)
+        print("✓ Get consumption status for partition_1 returns correct global_index and status (after fetch)")
 
         # Test get clear meta
         clear_meta = ray.get(
@@ -281,6 +322,31 @@ class TestTransferQueueController:
             )
         )
         assert success
+
+        # Verify get production status for partition_2
+        global_index_2, production_status_2 = ray.get(
+            tq_controller.get_production_status.remote(
+                partition_id=partition_id_2,
+                data_fields=data_fields,
+            )
+        )
+        expected_global_index_2 = torch.tensor(range(part1_index_range, part2_index_range + part1_index_range), dtype=torch.long)
+        assert torch.equal(global_index_2, expected_global_index_2)
+        expected_production_status_2 = torch.ones(part2_index_range, len(data_fields), dtype=torch.int8)
+        assert torch.equal(production_status_2, expected_production_status_2)
+        print("✓ Get production status for partition_2 returns correct global_index and status")
+
+        # Verify get consumption status for partition_2 (before consumption - should be all zeros)
+        global_index_2_consumed, consumption_status_2 = ray.get(
+            tq_controller.get_consumption_status.remote(
+                partition_id=partition_id_2,
+                task_name="generate_sequences",
+            )
+        )
+        assert torch.equal(global_index_2_consumed, expected_global_index_2)
+        expected_consumption_status_2 = torch.zeros(part2_index_range, dtype=torch.int8)
+        assert torch.equal(consumption_status_2, expected_consumption_status_2)
+        print("✓ Get consumption status for partition_2 returns correct global_index and status (before consumption)")
 
         # Clear partition 1
         partition_index_range_1 = ray.get(tq_controller.get_partition_index_range.remote(partition_id_1))

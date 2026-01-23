@@ -86,7 +86,7 @@ def test_data_partition_status():
     print("✓ Field metadata retrieval works")
 
     # Test consumption status
-    consumption_tensor = partition.get_consumption_status("test_task")
+    global_index, consumption_tensor = partition.get_consumption_status("test_task", )
     assert consumption_tensor is not None
     assert consumption_tensor.shape[0] == partition.total_samples_num
 
@@ -240,7 +240,7 @@ def test_data_partition_status_advanced():
 
     # Initial consumption tracking
     partition.mark_consumed(task_name, [0, 1])
-    initial_consumption = partition.get_consumption_status(task_name)
+    global_index, initial_consumption = partition.get_consumption_status(task_name)
     assert initial_consumption[0] == 1
     assert initial_consumption[1] == 1
 
@@ -258,7 +258,7 @@ def test_data_partition_status_advanced():
         12: {"field_d": (32,)},
     }
     partition.update_production_status([10, 11, 12], ["field_d"], dtypes, shapes, None)  # Triggers sample expansion
-    expanded_consumption = partition.get_consumption_status(task_name)
+    global_index, expanded_consumption = partition.get_consumption_status(task_name)
     assert expanded_consumption[0] == 1  # Preserved
     assert expanded_consumption[1] == 1  # Preserved
     assert expanded_consumption.shape[0] >= 13  # Expanded to accommodate new samples
@@ -358,7 +358,7 @@ def test_edge_cases_and_error_handling():
     # Test 3: Consumption status edge cases
     # Test consumption status creation before production status
     task_name = "early_task"
-    consumption_tensor = partition.get_consumption_status(task_name)
+    _, consumption_tensor = partition.get_consumption_status(task_name)
     assert consumption_tensor is not None
     assert consumption_tensor.shape[0] == partition.allocated_samples_num
 

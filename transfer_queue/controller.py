@@ -367,7 +367,7 @@ class DataPartitionStatus:
             # Update production status
             if self.production_status is not None and global_indices and field_names:
                 field_indices = [self.field_name_mapping.get(field) for field in field_names]
-                self.production_status[Tensor(global_indices)[:, None], Tensor(field_indices)] = 1
+                self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = 1
 
             # Update field metadata
             self._update_field_metadata(global_indices, dtypes, shapes, custom_meta)
@@ -487,12 +487,12 @@ class DataPartitionStatus:
             else:
                 self.consumption_status[task_name] = torch.zeros(0, dtype=torch.int8)
 
+        # Get consumption status for requested task
         consumption_status = self.consumption_status[task_name]
 
+        partition_global_index = torch.tensor(sorted(self.global_indexes), dtype=torch.long)
+
         if mask:
-            # Get mask for target partition
-            partition_global_index = Tensor(sorted(self.global_indexes), dtype=torch.long)
-            # Get consumption status for requested task
             consumption_status = consumption_status[partition_global_index]
 
         return partition_global_index, consumption_status
@@ -527,10 +527,9 @@ class DataPartitionStatus:
 
         production_status = self.production_status[:, col_mask]
 
+        partition_global_index = torch.tensor(sorted(self.global_indexes), dtype=torch.long)
+
         if mask:
-            # Get mask for target partition
-            partition_global_index = Tensor(sorted(self.global_indexes), dtype=torch.long)
-            # Get production status for requested fields
             production_status = production_status[partition_global_index]
 
         return partition_global_index, production_status
@@ -561,7 +560,7 @@ class DataPartitionStatus:
             row_mask = torch.ones(self.allocated_samples_num, dtype=torch.bool)
 
             # Apply consumption filter (exclude already consumed samples)
-            consumption_status = self.get_consumption_status(task_name, mask=False)
+            _, consumption_status = self.get_consumption_status(task_name, mask=False)
             if consumption_status is not None:
                 unconsumed_mask = consumption_status == 0
                 row_mask &= unconsumed_mask
