@@ -112,18 +112,20 @@ class MockController:
                         # Mock partition metadata response
                         response_body = {"metadata": self._mock_batch_meta(request_msg.body)}
                         response_type = ZMQRequestType.GET_PARTITION_META_RESPONSE
-                    elif request_msg.request_type == ZMQRequestType.CHECK_CONSUMPTION:
+                    elif request_msg.request_type == ZMQRequestType.GET_CONSUMPTION:
                         # Mock consumption status check - all consumed
                         response_body = {
                             "partition_id": request_msg.body.get("partition_id"),
-                            "consumed": True,
+                            "global_index": torch.tensor([0, 1, 2]),
+                            "consumption_status": torch.tensor([1, 1, 1]),
                         }
                         response_type = ZMQRequestType.CONSUMPTION_RESPONSE
-                    elif request_msg.request_type == ZMQRequestType.CHECK_PRODUCTION:
+                    elif request_msg.request_type == ZMQRequestType.GET_PRODUCTION:
                         # Mock production status check - all produced
                         response_body = {
                             "partition_id": request_msg.body.get("partition_id"),
-                            "produced": True,
+                            "global_index": torch.tensor([0, 1, 2]),
+                            "production_status": torch.tensor([[1, 1, 1], [1, 1, 1]]),
                         }
                         response_type = ZMQRequestType.PRODUCTION_RESPONSE
                     elif request_msg.request_type == ZMQRequestType.GET_LIST_PARTITIONS:
@@ -467,6 +469,52 @@ def test_check_production_status(client_setup):
     assert is_produced is True
 
 
+def test_get_consumption_status(client_setup):
+    """Test get_consumption_status - returns global_index and consumption_status tensors"""
+    client, _, _ = client_setup
+
+    # Test synchronous get_consumption_status
+    global_index, consumption_status = client.get_consumption_status(
+        task_name="generate_sequences", partition_id="train_0"
+    )
+
+    # Verify return types
+    assert global_index is not None
+    assert consumption_status is not None
+
+    # Verify global_index contains expected values
+    assert torch.equal(global_index, torch.tensor([0, 1, 2], dtype=torch.long))
+
+    # Verify consumption_status (mock returns all consumed)
+    expected_status = torch.tensor([1, 1, 1], dtype=torch.int8)
+    assert torch.equal(consumption_status, expected_status)
+
+    print("✓ get_consumption_status returns correct global_index and consumption_status")
+
+
+def test_get_production_status(client_setup):
+    """Test get_production_status - returns global_index and production_status tensors"""
+    client, _, _ = client_setup
+
+    # Test synchronous get_production_status
+    global_index, production_status = client.get_production_status(
+        data_fields=["prompt_ids", "attention_mask"], partition_id="train_0"
+    )
+
+    # Verify return types
+    assert global_index is not None
+    assert production_status is not None
+
+    # Verify global_index contains expected values
+    assert torch.equal(global_index, torch.tensor([0, 1, 2], dtype=torch.long))
+
+    # Verify production_status shape (mock returns 2x3 matrix)
+    expected_status = torch.tensor([[1, 1, 1], [1, 1, 1]], dtype=torch.int8)
+    assert torch.equal(production_status, expected_status)
+
+    print("✓ get_production_status returns correct global_index and production_status")
+
+
 def test_get_partition_list(client_setup):
     """Test partition list retrieval"""
     client, _, _ = client_setup
@@ -500,6 +548,54 @@ async def test_async_check_production_status(client_setup):
         data_fields=["prompt_ids", "attention_mask"], partition_id="train_0"
     )
     assert is_produced is True
+
+
+@pytest.mark.asyncio
+async def test_async_get_consumption_status(client_setup):
+    """Test async get_consumption_status - returns global_index and consumption_status tensors"""
+    client, _, _ = client_setup
+
+    # Test async_get_consumption_status
+    global_index, consumption_status = await client.async_get_consumption_status(
+        task_name="generate_sequences", partition_id="train_0"
+    )
+
+    # Verify return types
+    assert global_index is not None
+    assert consumption_status is not None
+
+    # Verify global_index contains expected values
+    assert torch.equal(global_index, torch.tensor([0, 1, 2], dtype=torch.long))
+
+    # Verify consumption_status (mock returns all consumed)
+    expected_status = torch.tensor([1, 1, 1], dtype=torch.int8)
+    assert torch.equal(consumption_status, expected_status)
+
+    print("✓ async_get_consumption_status returns correct global_index and consumption_status")
+
+
+@pytest.mark.asyncio
+async def test_async_get_production_status(client_setup):
+    """Test async get_production_status - returns global_index and production_status tensors"""
+    client, _, _ = client_setup
+
+    # Test async_get_production_status
+    global_index, production_status = await client.async_get_production_status(
+        data_fields=["prompt_ids", "attention_mask"], partition_id="train_0"
+    )
+
+    # Verify return types
+    assert global_index is not None
+    assert production_status is not None
+
+    # Verify global_index contains expected values
+    assert torch.equal(global_index, torch.tensor([0, 1, 2], dtype=torch.long))
+
+    # Verify production_status shape (mock returns 2x3 matrix)
+    expected_status = torch.tensor([[1, 1, 1], [1, 1, 1]], dtype=torch.int8)
+    assert torch.equal(production_status, expected_status)
+
+    print("✓ async_get_production_status returns correct global_index and production_status")
 
 
 @pytest.mark.asyncio
