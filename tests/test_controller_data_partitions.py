@@ -538,23 +538,28 @@ def test_get_production_status_for_fields():
 
     partition = DataPartitionStatus(partition_id="production_status_test")
 
-    # Add some data first
+    # Add some data first (using non-contiguous indices)
     partition.update_production_status(
-        global_indices=[0, 1, 2, 3, 4],
+        global_indices=[0, 1, 2, 3, 9],
         field_names=["field_a", "field_b"],
-        dtypes={i: {"field_a": "torch.int64", "field_b": "torch.bool"} for i in range(5)},
-        shapes={i: {"field_a": (32,), "field_b": (32,)} for i in range(5)},
+        dtypes={i: {"field_a": "torch.int64", "field_b": "torch.bool"} for i in [0, 1, 2, 3, 9]},
+        shapes={i: {"field_a": (32,), "field_b": (32,)} for i in [0, 1, 2, 3, 9]},
     )
 
     # Test get_production_status_for_fields WITHOUT mask (mask=False)
     global_index, production_status = partition.get_production_status_for_fields(
         field_names=["field_a", "field_b"], mask=False
     )
+    assert torch.equal(global_index, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
     # Without mask, should return all allocated samples
     assert production_status.shape[0] == partition.allocated_samples_num
-    # Production status should be 1 for samples 0-4 (produced), 0 for others
-    # Check that samples 0-4 have all fields produced (all 1s)
-    assert torch.all(production_status[0:5] == 1), "Samples 0-4 should all be produced"
+    # Production status should be 1 for produced samples (0, 1, 2, 3, 9), 0 for others
+    # Check that produced samples have all fields produced (all 1s)
+    assert torch.all(production_status[0] == 1), "Sample 0 should be produced"
+    assert torch.all(production_status[1] == 1), "Sample 1 should be produced"
+    assert torch.all(production_status[2] == 1), "Sample 2 should be produced"
+    assert torch.all(production_status[3] == 1), "Sample 3 should be produced"
+    assert torch.all(production_status[9] == 1), "Sample 9 should be produced"
     # Verify shape - should have 2 fields (columns)
     assert production_status.shape[1] == 2
 
@@ -564,11 +569,10 @@ def test_get_production_status_for_fields():
     global_index_masked, production_status_masked = partition.get_production_status_for_fields(
         field_names=["field_a", "field_b"], mask=True
     )
-    # With mask, should return only global_indexes (0-4)
-    assert global_index_masked.shape[0] == 5
-    assert torch.equal(global_index_masked, torch.tensor([0, 1, 2, 3, 4], dtype=torch.long))
+    assert torch.equal(global_index_masked, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
     # Masked status should be same as original for these indices
-    assert production_status_masked.shape[0] == 5
+    assert production_status_masked.shape == (len([0, 1, 2, 3, 9]), 2)
+    # All returned samples should be produced
     assert torch.all(production_status_masked == 1)
 
     print("✓ get_production_status_for_fields with mask works")
@@ -577,15 +581,15 @@ def test_get_production_status_for_fields():
     global_index_subset, production_status_subset = partition.get_production_status_for_fields(
         field_names=["field_a"], mask=True
     )
-    assert global_index_subset.shape[0] == 5
-    assert production_status_subset.shape == (5, 1)  # Only one field
+    assert global_index_subset.shape[0] == len([0, 1, 2, 3, 9])
+    assert production_status_subset.shape == (len([0, 1, 2, 3, 9]), 1)  # Only one field
 
     print("✓ get_production_status_for_fields with subset fields works")
 
     print("get_production_status_for_fields tests passed!\n")
 
 
-def test_consumption_status_mask_parameter():
+def test_get_consumption_status_parameter():
     """Test get_consumption_status method with mask parameter."""
     print("Testing consumption status mask parameter...")
 
@@ -594,42 +598,57 @@ def test_consumption_status_mask_parameter():
     from transfer_queue.controller import DataPartitionStatus
 
     partition = DataPartitionStatus(partition_id="consumption_mask_test")
+    partition_another = DataPartitionStatus(partition_id="other_partition")
 
     # Add some data
     partition.update_production_status(
-        global_indices=[0, 1, 2, 3, 4],
+        global_indices=[0, 1, 2, 3, 9],
         field_names=["field_a"],
-        dtypes={i: {"field_a": "torch.int64"} for i in range(5)},
-        shapes={i: {"field_a": (32,)} for i in range(5)},
+        dtypes={i: {"field_a": "torch.int64"} for i in [0, 1, 2, 3, 9]},
+        shapes={i: {"field_a": (32,)} for i in [0, 1, 2, 3, 9]},
+    )
+
+    partition_another.update_production_status(
+        global_indices=[5, 6, 7],
+        field_names=["field_a"],
+        dtypes={i: {"field_a": "torch.int64"} for i in [5, 6, 7]},
+        shapes={i: {"field_a": (32,)} for i in [5, 6, 7]},
     )
 
     # Mark some samples as consumed
-    partition.mark_consumed("test_task", [0, 2, 4])
+    partition.mark_consumed("test_task", [0, 2])
 
     # Test get_consumption_status WITHOUT mask (mask=False)
     global_index, consumption_status = partition.get_consumption_status("test_task", mask=False)
+    assert global_index.shape[0] == partition.total_samples_num
+    assert torch.equal(global_index, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
     # Without mask, should return all allocated samples
-    assert consumption_status.shape[0] == partition.allocated_samples_num
+    assert consumption_status.shape[0] == 10
     assert consumption_status[0].item() == 1
-    assert consumption_status[1].item() == 0  # Not consumed
+    assert consumption_status[1].item() == 0
     assert consumption_status[2].item() == 1
     assert consumption_status[3].item() == 0
-    assert consumption_status[4].item() == 1
+    assert consumption_status[4].item() == 0  # empty slot
+    assert consumption_status[5].item() == 0  # empty slot
+    assert consumption_status[6].item() == 0  # empty slot
+    assert consumption_status[7].item() == 0  # empty slot
+    assert consumption_status[8].item() == 0  # empty slot
+    assert consumption_status[9].item() == 0
 
     print("✓ get_consumption_status without mask works")
 
     # Test get_consumption_status WITH mask (mask=True)
     global_index_masked, consumption_status_masked = partition.get_consumption_status("test_task", mask=True)
-    # With mask, should return only global_indexes (0-4)
-    assert global_index_masked.shape[0] == 5
-    assert torch.equal(global_index_masked, torch.tensor([0, 1, 2, 3, 4], dtype=torch.long))
-    # Masked status should correspond to global indexes
-    assert consumption_status_masked.shape[0] == 5
+    # With mask, should return only global_indexes [0, 1, 2, 3, 9]
+    assert global_index_masked.shape[0] == partition.total_samples_num
+    assert torch.equal(global_index_masked, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
+    # Masked status shape[0] should correspond to global indexes
+    assert consumption_status_masked.shape[0] == partition.total_samples_num
     assert consumption_status_masked[0].item() == 1
     assert consumption_status_masked[1].item() == 0
     assert consumption_status_masked[2].item() == 1
     assert consumption_status_masked[3].item() == 0
-    assert consumption_status_masked[4].item() == 1
+    assert consumption_status_masked[4].item() == 0  # no empty slot. this corresponds to global_index=9
 
     print("✓ get_consumption_status with mask works")
 
