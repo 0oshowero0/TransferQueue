@@ -1423,10 +1423,10 @@ class TransferQueueController:
                     global_index, consumption_status = self.get_consumption_status(
                         params["partition_id"], params["task_name"]
                     )
-                    sample_filter = params.get("sample_filter")  # DEPRECATED in future
+                    sample_filter = params.get("sample_filter")  # TODO: DEPRECATED in future
 
-                    if sample_filter:
-                        # DEPRECATED in future
+                    if sample_filter and consumption_status is not None:
+                        # TODO: DEPRECATED in future
                         consumption_status = consumption_status[sample_filter]
 
                     response_msg = ZMQMessage.create(

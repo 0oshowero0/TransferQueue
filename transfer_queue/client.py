@@ -561,7 +561,7 @@ class AsyncTransferQueueClient:
 
         Example:
             >>> # Get consumption status
-            >>> global_index, consumption_status = asyncio.run(client.async_check_consumption_status(
+            >>> global_index, consumption_status = asyncio.run(client.async_get_consumption_status(
             ...     task_name="generate_sequences",
             ...     partition_id="train_0"
             ... ))
@@ -607,7 +607,7 @@ class AsyncTransferQueueClient:
         partition_id: str,
         socket: Optional[zmq.asyncio.Socket] = None,
     ) -> tuple[Optional[Tensor], Optional[Tensor]]:
-        """Get production status for current partition in a specific task.
+        """Get production status for current partition for specific fields.
 
         Args:
             data_fields: Data fields to check production status for
@@ -617,14 +617,14 @@ class AsyncTransferQueueClient:
         Returns:
             Tuple of:
             - Partition global index tensor
-            - Production status tensor for the specified task. 1 for ready, 0 for not ready.
+            - Production status tensor for the specified fields. 1 for ready, 0 for not ready.
 
         Raises:
             RuntimeError: If communication fails or controller returns error response
 
         Example:
             >>> # Get production status
-            >>> global_index, production_status = asyncio.run(client.async_check_production_status(
+            >>> global_index, production_status = asyncio.run(client.async_get_production_status(
             ...     data_fields=["input_ids", "attention_mask"],
             ...     partition_id="train_0"
             ... ))
@@ -672,7 +672,6 @@ class AsyncTransferQueueClient:
         Args:
             task_name: Name of the task to check consumption for
             partition_id: Partition id to check consumption status for
-            socket: ZMQ async socket for message transmission (injected by decorator)
 
         Returns:
             bool: True if all samples have been consumed by the task, False otherwise
@@ -696,19 +695,19 @@ class AsyncTransferQueueClient:
 
         if consumption_status is None:
             return False
-        return torch.all(consumption_status).item() == 1
+        return torch.all(consumption_status == 1).item()
 
     async def async_check_production_status(
         self,
         data_fields: list[str],
         partition_id: str,
     ) -> bool:
-        """Check if all samples for current partition are ready (produced) for consumption.
+        """Check if the all specific fields of samples for current partition are ready
+        (produced) for consumption.
 
         Args:
             data_fields: Data fields to check production status for
             partition_id: Partition id to check production status for
-            socket: ZMQ async socket for message transmission (injected by decorator)
 
         Returns:
             bool: True if all samples have been produced and ready, False otherwise
@@ -731,7 +730,7 @@ class AsyncTransferQueueClient:
 
         if production_status is None:
             return False
-        return torch.all(production_status).item() == 1
+        return torch.all(production_status == 1).item()
 
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_get_partition_list(
@@ -942,7 +941,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         Returns:
             Tuple of:
             - Partition global index tensor
-            - Production status tensor for the specified task. 1 for ready, 0 for not ready.
+            - Production status tensor for the specified fields. 1 for ready, 0 for not ready.
 
         Example:
             >>> global_index, production_status = client.get_production_status(
