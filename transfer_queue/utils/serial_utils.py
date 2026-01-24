@@ -166,8 +166,6 @@ class MsgpackEncoder:
         """Encode a regular tensor and return its metadata tuple."""
         # Handle non-contiguous tensors
 
-        assert self.aux_buffers is not None
-
         if not obj.is_contiguous():
             obj = obj.contiguous()
 
@@ -187,8 +185,6 @@ class MsgpackEncoder:
     def _encode_regular_tensor(self, obj: torch.Tensor) -> msgpack.Ext:
         """Encode a regular (non-nested) tensor with zero-copy."""
         # Handle non-contiguous tensors
-
-        assert self.aux_buffers is not None
 
         if not obj.is_contiguous():
             obj = obj.contiguous()
