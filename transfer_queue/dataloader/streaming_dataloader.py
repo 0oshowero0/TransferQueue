@@ -82,14 +82,13 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
         persistent_workers: bool = False,
         pin_memory_device: str = "",
     ):
-        """Initialize the StreamDataLoader.
+        """Initialize the StreamingDataLoader.
 
         Args:
             dataset: StreamingDataset instance.
             num_workers: Number of subprocesses for data loading.
             collate_fn: Function to collate samples into batches.
             pin_memory: If True, pin memory for GPU transfer.
-            timeout: Timeout for data loading.
             worker_init_fn: Worker initialization function.
             multiprocessing_context: Multiprocessing context.
             prefetch_factor: Number of batches to prefetch per worker.
@@ -102,9 +101,6 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
             parameter in PyTorch DataLoader is set to None because batching is managed
             by the StreamingDataset in coordination with RankAwareSampler.
         """
-
-        # Store reference to dataset for data retrieval
-        self.dataset = dataset
 
         super().__init__(
             dataset=dataset,

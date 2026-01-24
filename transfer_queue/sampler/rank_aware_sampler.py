@@ -87,24 +87,6 @@ class RankAwareSampler(BaseSampler):
         1. First rank samples from ``ready_indexes``, caches results for other ranks
         2. Other ranks pop and retrieve the cached indices
 
-        Internal state structure (self._states):
-
-        .. code-block:: python
-
-            self._states = {
-                "partition_id": {
-                    "task_name": {
-                        data_replica_group: {
-                            data_replica_rank: [sampled_indexes]  # Cached sampled indices
-                        }
-                    }
-                }
-            }
-
-        State lifecycle:
-        1. First rank samples from ``ready_indexes``, caches results for other ranks
-        2. Other ranks pop and retrieve the cached indices
-
         Args:
             ready_indexes: List of global indices for which all required fields of the
                 corresponding samples have been produced, and the samples are not labeled
