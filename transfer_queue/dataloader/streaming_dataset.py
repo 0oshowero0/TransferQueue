@@ -109,7 +109,7 @@ class StreamingDataset(IterableDataset):
             raise ValueError(f"micro_batch_size must be >= 1, got {micro_batch_size}")
 
         if len(required_fields) < 1:
-            raise ValueError(f"required_fields must be a list of more than one field name, got {self.required_fields}")
+            raise ValueError(f"required_fields must be a list with at least one field name, got {required_fields}")
 
         if data_replica_world_size < 1:
             raise ValueError(f"data_replica_world_size {data_replica_world_size} must >= 1")

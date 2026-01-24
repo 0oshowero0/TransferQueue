@@ -130,7 +130,7 @@ def generate_worker(rank_id: int, config: DictConfig, num_samples: int = 20):
     Args:
         rank_id: Unique identifier for this generator (used for sample indexing)
         config: TransferQueue configuration
-        num_samples: Number of samples to generate (default: 10)
+        num_samples: Number of samples to generate
 
     Note:
         Each sample has a unique sequence ID calculated as: seq_id = i + (rank_id * 10000)

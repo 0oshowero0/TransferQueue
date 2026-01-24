@@ -15,7 +15,7 @@
 
 import logging
 import os
-from typing import Iterator, Optional
+from typing import Optional
 
 import torch
 from tensordict import TensorDict
@@ -31,6 +31,16 @@ if not logger.hasHandlers():
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
     logger.addHandler(handler)
+
+
+def _identity_collate_fn(data: tuple[TensorDict, BatchMeta]) -> tuple[TensorDict, BatchMeta]:
+    """Identity collate function for TransferQueue.
+
+    This function acts as a pass-through, preserving the `(TensorDict, BatchMeta)`
+    structure yielded by `StreamingDataset`. It prevents PyTorch from attempting
+    to stack or modify the already-batched data.
+    """
+    return data
 
 
 class StreamingDataLoader(torch.utils.data.DataLoader):
@@ -102,6 +112,13 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
             by the StreamingDataset in coordination with RankAwareSampler.
         """
 
+        if collate_fn is None:
+            # use identical collate function to directly return the self-defined
+            # [TensorDict, BatchMeta] output of StreamingDataset
+            final_collate_fn = _identity_collate_fn
+        else:
+            final_collate_fn = collate_fn
+
         super().__init__(
             dataset=dataset,
             batch_size=None,  # Batch size is handled by the dataset
@@ -109,7 +126,7 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
             sampler=None,
             batch_sampler=None,
             num_workers=num_workers,
-            collate_fn=collate_fn,
+            collate_fn=final_collate_fn,
             pin_memory=pin_memory,
             drop_last=False,
             timeout=0,
@@ -120,14 +137,3 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
             persistent_workers=persistent_workers,
             pin_memory_device=pin_memory_device,
         )
-
-    def __iter__(self) -> Iterator[tuple[TensorDict, BatchMeta]]:
-        """Iterate over the dataset, yielding batches with metadata.
-
-        Yields:
-            Tuple[TensorDict, BatchMeta]: A tuple containing:
-                - TensorDict: Batch of data with the requested fields.
-                - BatchMeta: Corresponding metadata to interact with TransferQueue.
-        """
-        # Directly iterate over the dataset, which yields (batch, batch_meta) tuples
-        return iter(self.dataset)
