@@ -68,7 +68,7 @@ class FieldMeta:
             dtype=data["dtype"],
             shape=data["shape"],
             production_status=ProductionStatus(str(data["production_status"]))
-            if isinstance(data["production_status"], (int, str))
+            if isinstance(data["production_status"], int | str)
             else data["production_status"],
         )
 

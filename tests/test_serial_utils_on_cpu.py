@@ -574,7 +574,7 @@ def test_single_nested_tensor_serialization():
 
 def test_large_string_serialization():
     """Test serialization of large strings (>10KB).
-    
+
     Note: msgpack natively handles str type, so enc_hook is not called for strings.
     This test verifies large strings are correctly serialized/deserialized.
     """
@@ -583,9 +583,9 @@ def test_large_string_serialization():
 
     # Create a string larger than 10KB
     large_string = "x" * 11000  # ~11KB
-    
+
     serialized = encoder.encode({"text": large_string})
-    
+
     # Verify content is correctly restored
     decoded = decoder.decode(serialized)
     assert decoded["text"] == large_string

@@ -509,7 +509,11 @@ class AsyncTransferQueueClient:
         if response_msg.request_type != ZMQRequestType.GET_PARTITION_META_RESPONSE:
             raise RuntimeError("Failed to get metadata for clear operation.")
 
-        return BatchMeta.from_dict(response_msg.body["metadata"]) if isinstance(response_msg.body["metadata"], dict) else response_msg.body["metadata"]
+        return (
+            BatchMeta.from_dict(response_msg.body["metadata"])
+            if isinstance(response_msg.body["metadata"], dict)
+            else response_msg.body["metadata"]
+        )
 
     @dynamic_socket(socket_name="request_handle_socket")
     async def _clear_partition_in_controller(self, partition_id, socket=None):

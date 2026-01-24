@@ -257,9 +257,7 @@ class SimpleStorageUnit:
                         },
                     )
 
-                self.put_get_socket.send_multipart(
-                    [identity, *response_msg.serialize()], copy=False
-                )
+                self.put_get_socket.send_multipart([identity, *response_msg.serialize()], copy=False)
 
     def _handle_put(self, data_parts: ZMQMessage) -> ZMQMessage:
         """
