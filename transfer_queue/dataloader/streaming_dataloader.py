@@ -15,11 +15,13 @@
 
 import logging
 import os
-from typing import Optional
+from typing import Iterator, Optional
 
 import torch
+from tensordict import TensorDict
 
 from transfer_queue.dataloader.streaming_dataset import StreamingDataset
+from transfer_queue.metadata import BatchMeta
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
@@ -122,3 +124,14 @@ class StreamingDataLoader(torch.utils.data.DataLoader):
             persistent_workers=persistent_workers,
             pin_memory_device=pin_memory_device,
         )
+
+    def __iter__(self) -> Iterator[tuple[TensorDict, BatchMeta]]:
+        """Iterate over the dataset, yielding batches with metadata.
+
+        Yields:
+            Tuple[TensorDict, BatchMeta]: A tuple containing:
+                - TensorDict: Batch of data with the requested fields.
+                - BatchMeta: Corresponding metadata to interact with TransferQueue.
+        """
+        # Directly iterate over the dataset, which yields (batch, batch_meta) tuples
+        return iter(self.dataset)

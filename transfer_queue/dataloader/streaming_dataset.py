@@ -105,7 +105,6 @@ class StreamingDataset(IterableDataset):
             ValueError: If data_replica_world_size < 1 or data_replica_rank is out of
                 valid range [0, data_replica_world_size - 1].
         """
-
         self.config = config
         self.micro_batch_size = micro_batch_size
         self.required_fields = required_fields
@@ -165,6 +164,7 @@ class StreamingDataset(IterableDataset):
         if self._tq_client is None:
             self._create_client()
 
+        # TODO: need to consider async scenario where the samples in partition is dynamically increasing
         while not self._tq_client.check_consumption_status(self.task_name, self.partition_id):
             try:
                 # Get metadata from controller
