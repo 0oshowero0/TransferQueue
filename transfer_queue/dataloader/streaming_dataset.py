@@ -47,20 +47,20 @@ class StreamingDataset(IterableDataset):
     scenarios where each rank independently retrieves data through TransferQueue.
 
     Usage Example:
-        >>> # On each rank (same data_replica_group, different data_replica_rank):
         >>> dataset = StreamingDataset(
         ...     config=config,
         ...     micro_batch_size=4,
         ...     required_fields=["input_ids", "attention_mask"],
         ...     partition_id="train",
         ...     task_name="update_actor",
-        ...     data_replica_group=dp_group_id,  # Same for all ranks in DP group
-        ...     data_replica_rank=local_rank,    # Different for each rank
-        ...     data_replica_world_size=dp_world_size,
+        ...     data_replica_group=data_replica_group_id,          # Same for all ranks in data replica group
+        ...     data_replica_rank=local_rank,                      # local rank in data replica group
+        ...     data_replica_world_size=world_size/dp_world_size,  # size of data replica group
         ... )
         >>> dataloader = StreamingDataLoader(
         ...     dataset,
-        ...     num_workers=0,
+        ...     num_workers=2,          # num_workers for data retrieval, each has a TQ client for async data retrieval
+        ...     prefetch_factor=2,      # number of batches loaded in advance by each worker
         ... )
         >>> for batch, batch_meta in dataloader:
         ...     # batch is a TensorDict with the requested fields
@@ -102,17 +102,8 @@ class StreamingDataset(IterableDataset):
                 Must be >= 1.
 
         Raises:
-            ValueError: If data_replica_world_size < 1 or data_replica_rank is out of
-                valid range [0, data_replica_world_size - 1].
+            ValueError: If input parameters are invalid.
         """
-        self.config = config
-        self.micro_batch_size = micro_batch_size
-        self.required_fields = required_fields
-        self.partition_id = partition_id
-        self.task_name = task_name
-        self.data_replica_group = data_replica_group
-        self.data_replica_rank = data_replica_rank
-        self.data_replica_world_size = data_replica_world_size
 
         if micro_batch_size < 1:
             raise ValueError(f"micro_batch_size must be >= 1, got {micro_batch_size}")
@@ -128,6 +119,15 @@ class StreamingDataset(IterableDataset):
                 f"data_replica_rank {data_replica_rank} must be greater than or equal to 0 and less than "
                 f"data_replica_world_size {data_replica_world_size}"
             )
+
+        self.config = config
+        self.micro_batch_size = micro_batch_size
+        self.required_fields = required_fields
+        self.partition_id = partition_id
+        self.task_name = task_name
+        self.data_replica_group = data_replica_group
+        self.data_replica_rank = data_replica_rank
+        self.data_replica_world_size = data_replica_world_size
 
         # Build sampling config for controller
         self.sampling_config = {
