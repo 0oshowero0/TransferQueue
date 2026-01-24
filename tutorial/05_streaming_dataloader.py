@@ -30,11 +30,14 @@ Use Cases:
 - Fine-grained micro-batch-level data retrieval
 """
 
+import os
 import sys
 import textwrap
 import time
 import warnings
 from pathlib import Path
+
+os.environ["RAY_DEDUP_LOGS"] = "0"
 
 warnings.filterwarnings(
     action="ignore",
@@ -220,9 +223,13 @@ def update_worker(
     # Wraps the dataset and provides PyTorch DataLoader-compatible interface
     dataloader = StreamingDataLoader(
         dataset=dataset,
-        num_workers=0,  # We can enable parallel data retrievel and data pre-fetch!
+        num_workers=2,  # We can enable parallel data retrieval and data pre-fetching!
+        prefetch_factor=2,
     )
-    print(f"[Update Worker@{rank_id}] StreamingDataLoader ready")
+    print(
+        f"[Update Worker@{rank_id}] StreamingDataLoader ready, enabling data pre-fetching through num_workers "
+        f"and prefetch_factor."
+    )
 
     # Step 3: Consume data batches
     print(f"[Update Worker@{rank_id}] Starting data consumption...")
