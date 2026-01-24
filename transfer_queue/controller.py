@@ -29,6 +29,7 @@ import ray
 import torch
 import zmq
 from ray.util import get_node_ip_address
+from torch import Tensor
 
 from transfer_queue.metadata import (
     BatchMeta,
@@ -215,11 +216,11 @@ class DataPartitionStatus:
 
     # Production status tensor - dynamically expandable
     # Values: 0 = not produced, 1 = ready for consumption
-    production_status: Optional[torch.Tensor] = torch.zeros(TQ_INIT_SAMPLE_NUM, TQ_INIT_FIELD_NUM, dtype=torch.int8)
+    production_status: Optional[Tensor] = torch.zeros(TQ_INIT_SAMPLE_NUM, TQ_INIT_FIELD_NUM, dtype=torch.int8)
 
     # Consumption status per task - task_name -> consumption_tensor
     # Each tensor tracks which samples have been consumed by that task
-    consumption_status: dict[str, torch.Tensor] = field(default_factory=dict)
+    consumption_status: dict[str, Tensor] = field(default_factory=dict)
 
     # Sample metadata
     global_indexes: set[int] = field(
@@ -230,6 +231,7 @@ class DataPartitionStatus:
     field_name_mapping: dict[str, int] = field(default_factory=dict)  # field_name -> column_index
     field_dtypes: dict[int, dict[str, Any]] = field(default_factory=dict)  # global_idx -> {field: dtype}
     field_shapes: dict[int, dict[str, Any]] = field(default_factory=dict)  # global_idx -> {field: shape}
+    field_custom_metas: dict[int, dict[str, Any]] = field(default_factory=dict)  # global_idx -> {field: custom_meta}
 
     # Threading lock for concurrency control; only for preventing mask operation error when expanding production_status.
     # No need to strictly lock for every read/write operation since freshness is not critical.
@@ -326,6 +328,7 @@ class DataPartitionStatus:
         field_names: list[str],
         dtypes: Optional[dict[int, dict[str, Any]]],
         shapes: Optional[dict[int, dict[str, Any]]],
+        custom_meta: Optional[dict[int, dict[str, Any]]] = None,
     ) -> bool:
         """
         Update production status for specific samples and fields.
@@ -336,6 +339,7 @@ class DataPartitionStatus:
             field_names: List of field names to mark as produced
             dtypes: Optional per-sample field dtype information
             shapes: Optional per-sample field shape information
+            custom_meta: Optional per-sample field custom metadata
 
         Returns:
             True if update was successful, False on error
@@ -366,7 +370,7 @@ class DataPartitionStatus:
                 self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = 1
 
             # Update field metadata
-            self._update_field_metadata(global_indices, dtypes, shapes)
+            self._update_field_metadata(global_indices, dtypes, shapes, custom_meta)
 
             # Save these global_indexes
             self.global_indexes.update(global_indices)
@@ -382,54 +386,62 @@ class DataPartitionStatus:
         global_indices: list[int],
         dtypes: Optional[dict[int, dict[str, Any]]],
         shapes: Optional[dict[int, dict[str, Any]]],
+        custom_meta: Optional[dict[int, dict[str, Any]]],
     ):
         """Update field dtype and shape metadata."""
         if not global_indices:
             return
 
-        assert len(global_indices) == len(dtypes), "`global_indices` and `dtypes` length mismatch."
-        assert len(global_indices) == len(shapes), "`global_indices` and `shapes` length mismatch."
+        # Validate lengths only for provided mappings
+        if dtypes and len(global_indices) != len(dtypes):
+            raise ValueError(f"`global_indices` {len(global_indices)} and `dtypes` {len(dtypes)} length mismatch.")
+        if shapes and len(global_indices) != len(shapes):
+            raise ValueError(f"`global_indices` {len(global_indices)} and `shapes` {len(shapes)} length mismatch.")
+        if custom_meta and len(global_indices) != len(custom_meta):
+            raise ValueError(
+                f"`global_indices` {len(global_indices)} and `custom_meta` {len(custom_meta)} length mismatch."
+            )
 
-        dtype_value = itemgetter(*global_indices)(dtypes) if dtypes else None
-        shape_value = itemgetter(*global_indices)(shapes) if shapes else None
+        # Extract values for each provided mapping; if a mapping is absent, use Nones
+        if dtypes:
+            dtype_value = itemgetter(*global_indices)(dtypes)
+            if not isinstance(dtype_value, tuple):
+                dtype_value = (dtype_value,)
+        else:
+            dtype_value = tuple([None] * len(global_indices))
 
-        if not isinstance(dtype_value, tuple):
-            dtype_value = (dtype_value,)
-        if not isinstance(shape_value, tuple):
-            shape_value = (shape_value,)
+        if shapes:
+            shape_value = itemgetter(*global_indices)(shapes)
+            if not isinstance(shape_value, tuple):
+                shape_value = (shape_value,)
+        else:
+            shape_value = tuple([None] * len(global_indices))
+
+        if custom_meta:
+            custom_meta_value = itemgetter(*global_indices)(custom_meta)
+            if not isinstance(custom_meta_value, tuple):
+                custom_meta_value = (custom_meta_value,)
+        else:
+            custom_meta_value = tuple([None] * len(global_indices))
 
         for i, global_idx in enumerate(global_indices):
-            if global_idx not in self.field_dtypes:
-                self.field_dtypes[global_idx] = {}
-            if global_idx not in self.field_shapes:
-                self.field_shapes[global_idx] = {}
-
-            if dtype_value is not None:
+            # Only create and update dtype mapping if a dtype value was provided
+            if dtype_value[i] is not None:
+                if global_idx not in self.field_dtypes:
+                    self.field_dtypes[global_idx] = {}
                 self.field_dtypes[global_idx].update(dtype_value[i])
-            if shape_value is not None:
+
+            # Only create and update shape mapping if a shape value was provided
+            if shape_value[i] is not None:
+                if global_idx not in self.field_shapes:
+                    self.field_shapes[global_idx] = {}
                 self.field_shapes[global_idx].update(shape_value[i])
 
-    # ==================== Consumption Status Interface ====================
-
-    def get_consumption_status(self, task_name: str) -> torch.Tensor:
-        """
-        Get or create consumption status for a specific task.
-        Handles dynamic expansion when new samples are added.
-
-        Args:
-            task_name: Name of the consumer task
-
-        Returns:
-            Consumption status tensor for the specified task
-        """
-
-        if task_name not in self.consumption_status:
-            if self.production_status is not None:
-                self.consumption_status[task_name] = torch.zeros(self.allocated_samples_num, dtype=torch.int8)
-            else:
-                self.consumption_status[task_name] = torch.zeros(0, dtype=torch.int8)
-
-        return self.consumption_status[task_name]
+            # Only create and update custom_meta mapping if a custom_meta value was provided
+            if custom_meta_value[i] is not None:
+                if global_idx not in self.field_custom_metas:
+                    self.field_custom_metas[global_idx] = {}
+                self.field_custom_metas[global_idx].update(custom_meta_value[i])
 
     def mark_consumed(self, task_name: str, global_indices: list[int]):
         """
@@ -441,7 +453,7 @@ class DataPartitionStatus:
 
         """
         try:
-            consumption_status = self.get_consumption_status(task_name)
+            _, consumption_status = self.get_consumption_status(task_name, mask=False)
 
             if consumption_status.numel() > 0 and global_indices:
                 consumption_status[global_indices] = 1
@@ -452,15 +464,52 @@ class DataPartitionStatus:
                 f"shape {consumption_status.shape}"
             )
 
-    def get_production_status_for_fields(self, field_names: list[str]) -> bool:
+    # ==================== Consumption Status Interface ====================
+
+    def get_consumption_status(self, task_name: str, mask: bool = False) -> tuple[Tensor, Tensor]:
+        """
+        Get or create consumption status for a specific task.
+        Handles dynamic expansion when new samples are added.
+
+        Args:
+            task_name: Name of the consumer task
+            mask: Whether to return only the status for current partition samples
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Consumption status tensor for the specified task. 1 for consumed, 0 for not consumed.
+        """
+
+        if task_name not in self.consumption_status:
+            if self.production_status is not None:
+                self.consumption_status[task_name] = torch.zeros(self.allocated_samples_num, dtype=torch.int8)
+            else:
+                self.consumption_status[task_name] = torch.zeros(0, dtype=torch.int8)
+
+        # Get consumption status for requested task
+        consumption_status = self.consumption_status[task_name]
+
+        partition_global_index = torch.tensor(sorted(self.global_indexes), dtype=torch.long)
+
+        if mask:
+            consumption_status = consumption_status[partition_global_index]
+
+        return partition_global_index, consumption_status
+
+    # ==================== Production Status Interface ====================
+    def get_production_status_for_fields(self, field_names: list[str], mask: bool = False) -> tuple[Tensor, Tensor]:
         """
         Check if all samples for specified fields are fully produced and ready.
 
         Args:
             field_names: List of field names to check production status for
+            mask: Whether to return only the status for current partition samples
 
         Returns:
-            bool: True if all samples have been produced for all specified fields, False otherwise
+            Tuple of:
+            - Partition global index tensor
+            - Production status tensor for the specified task. 1 for ready, 0 for not ready.
         """
         if self.production_status is None or field_names is None or len(field_names) == 0:
             return False
@@ -476,13 +525,14 @@ class DataPartitionStatus:
         if field_indices:
             col_mask[field_indices] = True
 
-        # Get production status for requested fields
-        relevant_status = self.production_status[:, col_mask]
+        production_status = self.production_status[:, col_mask]
 
-        # Check if all samples have all requested fields produced (all values are 1)
-        all_fields_produced = torch.all(relevant_status == 1).item()
+        partition_global_index = torch.tensor(sorted(self.global_indexes), dtype=torch.long)
 
-        return all_fields_produced
+        if mask:
+            production_status = production_status[partition_global_index]
+
+        return partition_global_index, production_status
 
     # ==================== Data Scanning and Query Methods ====================
 
@@ -510,7 +560,7 @@ class DataPartitionStatus:
             row_mask = torch.ones(self.allocated_samples_num, dtype=torch.bool)
 
             # Apply consumption filter (exclude already consumed samples)
-            consumption_status = self.get_consumption_status(task_name)
+            _, consumption_status = self.get_consumption_status(task_name, mask=False)
             if consumption_status is not None:
                 unconsumed_mask = consumption_status == 0
                 row_mask &= unconsumed_mask
@@ -544,6 +594,14 @@ class DataPartitionStatus:
         """Get shape for a specific sample and field."""
         return self.field_shapes.get(global_index, {}).get(field_name)
 
+    def get_field_custom_meta(self, global_indices: list[int], field_names: list[str]) -> dict[int, dict[str, Any]]:
+        """Get custom_meta for multiple samples and fields."""
+        return {
+            idx: {f: v for f, v in self.field_custom_metas[idx].items() if f in field_names}
+            for idx in global_indices
+            if idx in self.field_custom_metas
+        }
+
     # ==================== Statistics and Monitoring ====================
 
     def get_statistics(self) -> dict[str, Any]:
@@ -571,7 +629,9 @@ class DataPartitionStatus:
                 field_produced = (self.production_status[:, field_idx] == 1).sum().item()
                 field_stats[field_name] = {
                     "produced_samples": field_produced,
-                    "production_progress": field_produced / self.total_samples_num if self.total_samples_num > 0 else 0,
+                    "production_progress": (
+                        field_produced / self.total_samples_num if self.total_samples_num > 0 else 0
+                    ),
                 }
             stats["field_statistics"] = field_stats
 
@@ -581,7 +641,9 @@ class DataPartitionStatus:
             consumed_samples = (consumption_tensor == 1).sum().item()
             consumption_stats[task_name] = {
                 "consumed_samples": consumed_samples,
-                "consumption_progress": consumed_samples / self.total_samples_num if self.total_samples_num > 0 else 0,
+                "consumption_progress": (
+                    consumed_samples / self.total_samples_num if self.total_samples_num > 0 else 0
+                ),
             }
         stats["consumption_statistics"] = consumption_stats
 
@@ -605,7 +667,7 @@ class DataPartitionStatus:
                 if name == "data_status_lock":
                     continue
 
-                if isinstance(value, torch.Tensor):
+                if isinstance(value, Tensor):
                     new_val = value.clone().detach()
                 else:
                     new_val = copy.deepcopy(value)
@@ -632,6 +694,10 @@ class DataPartitionStatus:
                     consumption_tensor[indexes_to_release] = 0
 
             self.global_indexes.difference_update(indexes_to_release)
+            for idx in indexes_to_release:
+                self.field_dtypes.pop(idx, None)
+                self.field_shapes.pop(idx, None)
+                self.field_custom_metas.pop(idx, None)
 
         except Exception as e:
             logger.error(
@@ -658,7 +724,9 @@ class TransferQueueController:
     """
 
     def __init__(
-        self, sampler: BaseSampler | type[BaseSampler] = SequentialSampler, polling_mode: bool = False
+        self,
+        sampler: BaseSampler | type[BaseSampler] = SequentialSampler,
+        polling_mode: bool = False,
     ) -> None:
         """Initialize the TransferQueue Controller.
 
@@ -791,6 +859,7 @@ class TransferQueueController:
         field_names: list[str],
         dtypes: Optional[dict[int, dict[str, Any]]],
         shapes: Optional[dict[int, dict[str, Any]]],
+        custom_meta: Optional[dict[int, dict[str, Any]]] = None,
     ) -> bool:
         """
         Update production status for specific samples and fields in a partition.
@@ -811,7 +880,7 @@ class TransferQueueController:
             logger.error(f"Partition {partition_id} not found")
             return False
 
-        success = partition.update_production_status(global_indexes, field_names, dtypes, shapes)
+        success = partition.update_production_status(global_indexes, field_names, dtypes, shapes, custom_meta)
         if success:
             logger.debug(
                 f"[{self.controller_id}]: Updated production status for partition {partition_id}: "
@@ -821,7 +890,7 @@ class TransferQueueController:
 
     # ==================== Data Consumption API ====================
 
-    def get_consumption_status(self, partition_id: str, task_name: str) -> Optional[torch.Tensor]:
+    def get_consumption_status(self, partition_id: str, task_name: str) -> tuple[Optional[Tensor], Optional[Tensor]]:
         """
         Get or create consumption status for a specific task and partition.
         Delegates to the partition's own method.
@@ -831,15 +900,19 @@ class TransferQueueController:
             task_name: Name of the consumer task
 
         Returns:
-            Consumption status tensor if partition exists, None otherwise
+            Tuple of:
+            - Partition global index tensor
+            - Consumption status tensor for the specified task. 1 for consumed, 0 for not consumed.
         """
         partition = self._get_partition(partition_id)
         if not partition:
-            return None
+            return None, None
 
-        return partition.get_consumption_status(task_name)
+        return partition.get_consumption_status(task_name, mask=True)
 
-    def get_production_status(self, partition_id: str, data_fields: list[str]) -> bool:
+    def get_production_status(
+        self, partition_id: str, data_fields: list[str]
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
         """
         Check if all samples for specified fields are fully produced in a partition.
 
@@ -848,13 +921,15 @@ class TransferQueueController:
             data_fields: List of field names to check production status for
 
         Returns:
-            bool: True if all samples have been produced for all specified fields, False otherwise
+            Tuple of:
+            - Partition global index tensor
+            - Production status tensor for the specified task. 1 for ready, 0 for not ready.
         """
         partition = self._get_partition(partition_id)
         if not partition:
-            return False
+            return None, None
 
-        return partition.get_production_status_for_fields(data_fields)
+        return partition.get_production_status_for_fields(data_fields, mask=True)
 
     def get_metadata(
         self,
@@ -1070,7 +1145,11 @@ class TransferQueueController:
             )
             samples.append(sample)
 
-        return BatchMeta(samples=samples)
+        custom_meta = partition.get_field_custom_meta(batch_global_indexes, data_fields)
+
+        batch_meta = BatchMeta(samples=samples)
+        batch_meta.update_custom_meta(custom_meta)
+        return batch_meta
 
     def clear_partition(self, partition_id: str, clear_consumption: bool = True):
         """
@@ -1092,7 +1171,12 @@ class TransferQueueController:
         self.index_manager.release_partition(partition_id)
         self.partitions.pop(partition_id)
 
-    def clear_meta(self, global_indexes: list[int], partition_ids: list[str], clear_consumption: bool = True):
+    def clear_meta(
+        self,
+        global_indexes: list[int],
+        partition_ids: list[str],
+        clear_consumption: bool = True,
+    ):
         """
         Clear meta for individual samples (preserving the partition).
 
@@ -1230,7 +1314,9 @@ class TransferQueueController:
     def _start_process_handshake(self):
         """Start the handshake process thread."""
         self.wait_connection_thread = Thread(
-            target=self._wait_connection, name="TransferQueueControllerWaitConnectionThread", daemon=True
+            target=self._wait_connection,
+            name="TransferQueueControllerWaitConnectionThread",
+            daemon=True,
         )
         self.wait_connection_thread.start()
 
@@ -1246,7 +1332,9 @@ class TransferQueueController:
     def _start_process_request(self):
         """Start the request processing thread."""
         self.process_request_thread = Thread(
-            target=self._process_request, name="TransferQueueControllerProcessRequestThread", daemon=True
+            target=self._process_request,
+            name="TransferQueueControllerProcessRequestThread",
+            daemon=True,
         )
         self.process_request_thread.start()
 
@@ -1327,22 +1415,19 @@ class TransferQueueController:
                         body={"message": f"Clear partition operation completed by controller {self.controller_id}"},
                     )
 
-            elif request_msg.request_type == ZMQRequestType.CHECK_CONSUMPTION:
-                with perf_monitor.measure(op_type="CHECK_CONSUMPTION"):
+            elif request_msg.request_type == ZMQRequestType.GET_CONSUMPTION:
+                with perf_monitor.measure(op_type="GET_CONSUMPTION"):
                     # Handle consumption status checks
                     params = request_msg.body
 
-                    consumption_status = self.get_consumption_status(params["partition_id"], params["task_name"])
-                    sample_filter = params.get("sample_filter")
+                    global_index, consumption_status = self.get_consumption_status(
+                        params["partition_id"], params["task_name"]
+                    )
+                    sample_filter = params.get("sample_filter")  # TODO: DEPRECATED in future
 
-                    if consumption_status is not None and sample_filter:
-                        batch_status = consumption_status[sample_filter]
-                        consumed = torch.all(batch_status == 1).item()
-                    elif consumption_status is not None:
-                        batch_status = consumption_status
-                        consumed = torch.all(batch_status == 1).item()
-                    else:
-                        consumed = False
+                    if sample_filter and consumption_status is not None:
+                        # TODO: DEPRECATED in future
+                        consumption_status = consumption_status[sample_filter]
 
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.CONSUMPTION_RESPONSE,
@@ -1350,16 +1435,19 @@ class TransferQueueController:
                         receiver_id=request_msg.sender_id,
                         body={
                             "partition_id": params["partition_id"],
-                            "consumed": consumed,
+                            "global_index": global_index,
+                            "consumption_status": consumption_status,
                         },
                     )
 
-            elif request_msg.request_type == ZMQRequestType.CHECK_PRODUCTION:
-                with perf_monitor.measure(op_type="CHECK_PRODUCTION"):
+            elif request_msg.request_type == ZMQRequestType.GET_PRODUCTION:
+                with perf_monitor.measure(op_type="GET_PRODUCTION"):
                     # Handle production status checks
                     params = request_msg.body
 
-                    produced = self.get_production_status(params["partition_id"], params["data_fields"])
+                    global_index, production_status = self.get_production_status(
+                        params["partition_id"], params["data_fields"]
+                    )
 
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.PRODUCTION_RESPONSE,
@@ -1367,7 +1455,8 @@ class TransferQueueController:
                         receiver_id=request_msg.sender_id,
                         body={
                             "partition_id": params["partition_id"],
-                            "produced": produced,
+                            "global_index": global_index,
+                            "production_status": production_status,
                         },
                     )
 
@@ -1408,6 +1497,7 @@ class TransferQueueController:
                         field_names=message_data.get("fields", []),
                         dtypes=message_data.get("dtypes", {}),
                         shapes=message_data.get("shapes", {}),
+                        custom_meta=message_data.get("custom_meta", {}),
                     )
 
                     if success:

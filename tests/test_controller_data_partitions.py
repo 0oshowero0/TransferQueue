@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
@@ -63,6 +65,7 @@ def test_data_partition_status():
             1: {"input_ids": (512,), "attention_mask": (512,)},
             2: {"input_ids": (512,), "attention_mask": (512,)},
         },
+        custom_meta=None,
     )
 
     assert success
@@ -83,9 +86,9 @@ def test_data_partition_status():
     print("✓ Field metadata retrieval works")
 
     # Test consumption status
-    consumption_tensor = partition.get_consumption_status("test_task")
+    global_index, consumption_tensor = partition.get_consumption_status("test_task", mask=False)
     assert consumption_tensor is not None
-    assert consumption_tensor.shape[0] == partition.total_samples_num
+    assert consumption_tensor.shape[0] == partition.allocated_samples_num
 
     print("✓ Consumption status creation works")
 
@@ -172,6 +175,7 @@ def test_dynamic_expansion_scenarios():
             5: {"field_1": (32,)},
             10: {"field_1": (32,)},
         },
+        custom_meta=None,
     )
     assert partition.total_samples_num == 3
     assert partition.allocated_samples_num >= 11  # Should accommodate index 10
@@ -180,7 +184,7 @@ def test_dynamic_expansion_scenarios():
     # Scenario 2: Adding many fields dynamically
     for i in range(15):
         partition.update_production_status(
-            [0], [f"field_{i}"], {0: {f"field_{i}": "torch.bool"}}, {0: {f"field_{i}": (32,)}}
+            [0], [f"field_{i}"], {0: {f"field_{i}": "torch.bool"}}, {0: {f"field_{i}": (32,)}}, None
         )
 
     assert partition.total_fields_num == 16  # Original + 15 new fields
@@ -222,7 +226,7 @@ def test_data_partition_status_advanced():
     # Add data to trigger expansion
     dtypes = {i: {f"dynamic_field_{s}": "torch.bool" for s in ["a", "b", "c"]} for i in range(5)}
     shapes = {i: {f"dynamic_field_{s}": (32,) for s in ["a", "b", "c"]} for i in range(5)}
-    partition.update_production_status([0, 1, 2, 3, 4], ["field_a", "field_b", "field_c"], dtypes, shapes)
+    partition.update_production_status([0, 1, 2, 3, 4], ["field_a", "field_b", "field_c"], dtypes, shapes, None)
 
     # Properties should reflect current state
     assert partition.total_samples_num >= 5  # At least 5 samples
@@ -236,7 +240,7 @@ def test_data_partition_status_advanced():
 
     # Initial consumption tracking
     partition.mark_consumed(task_name, [0, 1])
-    initial_consumption = partition.get_consumption_status(task_name)
+    global_index, initial_consumption = partition.get_consumption_status(task_name)
     assert initial_consumption[0] == 1
     assert initial_consumption[1] == 1
 
@@ -253,8 +257,8 @@ def test_data_partition_status_advanced():
         11: {"field_d": (32,)},
         12: {"field_d": (32,)},
     }
-    partition.update_production_status([10, 11, 12], ["field_d"], dtypes, shapes)  # Triggers sample expansion
-    expanded_consumption = partition.get_consumption_status(task_name)
+    partition.update_production_status([10, 11, 12], ["field_d"], dtypes, shapes, None)  # Triggers sample expansion
+    global_index, expanded_consumption = partition.get_consumption_status(task_name)
     assert expanded_consumption[0] == 1  # Preserved
     assert expanded_consumption[1] == 1  # Preserved
     assert expanded_consumption.shape[0] >= 13  # Expanded to accommodate new samples
@@ -265,13 +269,13 @@ def test_data_partition_status_advanced():
     # Start with some fields
     dtypes = {0: {"initial_field": "torch.bool"}}
     shapes = {0: {"field_d": (32,)}}
-    partition.update_production_status([0], ["initial_field"], dtypes, shapes)
+    partition.update_production_status([0], ["initial_field"], dtypes, shapes, None)
 
     # Add many fields to trigger column expansion
     new_fields = [f"dynamic_field_{i}" for i in range(20)]
     dtypes = {1: {f"dynamic_field_{i}": "torch.bool" for i in range(20)}}
     shapes = {1: {f"dynamic_field_{i}": (32,) for i in range(20)}}
-    partition.update_production_status([1], new_fields, dtypes, shapes)
+    partition.update_production_status([1], new_fields, dtypes, shapes, None)
 
     # Verify all fields are registered and accessible
     assert "initial_field" in partition.field_name_mapping
@@ -354,7 +358,7 @@ def test_edge_cases_and_error_handling():
     # Test 3: Consumption status edge cases
     # Test consumption status creation before production status
     task_name = "early_task"
-    consumption_tensor = partition.get_consumption_status(task_name)
+    _, consumption_tensor = partition.get_consumption_status(task_name)
     assert consumption_tensor is not None
     assert consumption_tensor.shape[0] == partition.allocated_samples_num
 
@@ -441,3 +445,211 @@ def test_performance_characteristics():
     print("✓ Memory usage patterns reasonable")
 
     print("Performance characteristics tests passed!\n")
+
+
+def test_custom_meta_in_data_partition_status():
+    """Simplified tests for custom_meta functionality in DataPartitionStatus."""
+
+    print("Testing simplified custom_meta in DataPartitionStatus...")
+
+    from transfer_queue.controller import DataPartitionStatus
+
+    partition = DataPartitionStatus(partition_id="custom_meta_test")
+
+    # Basic custom_meta storage via update_production_status
+    global_indices = [0, 1, 2]
+    field_names = ["input_ids", "attention_mask"]
+    dtypes = {i: {"input_ids": "torch.int32", "attention_mask": "torch.bool"} for i in global_indices}
+    shapes = {i: {"input_ids": (512,), "attention_mask": (512,)} for i in global_indices}
+    custom_meta = {
+        0: {"input_ids": {"token_count": 100}},
+        1: {"attention_mask": {"mask_ratio": 0.2}},
+        2: {"input_ids": {"token_count": 300}},
+    }
+
+    success = partition.update_production_status(
+        global_indices=global_indices,
+        field_names=field_names,
+        dtypes=dtypes,
+        shapes=shapes,
+        custom_meta=custom_meta,
+    )
+
+    assert success
+
+    # Verify some stored values
+    assert partition.field_custom_metas[0]["input_ids"]["token_count"] == 100
+    assert partition.field_custom_metas[1]["attention_mask"]["mask_ratio"] == 0.2
+
+    # Retrieval via helper for a subset of fields
+    retrieved = partition.get_field_custom_meta([0, 1], ["input_ids", "attention_mask"])
+    assert 0 in retrieved and "input_ids" in retrieved[0]
+    assert 1 in retrieved and "attention_mask" in retrieved[1]
+
+    # Clearing a sample should remove its custom_meta
+    partition.clear_data([0], clear_consumption=True)
+    assert 0 not in partition.field_custom_metas
+
+    print("✓ Custom_meta tests passed")
+
+
+def test_update_field_metadata_variants():
+    """Test _update_field_metadata handles dtypes/shapes/custom_meta being optional and merging."""
+    from transfer_queue.controller import DataPartitionStatus
+
+    partition = DataPartitionStatus(partition_id="update_meta_test")
+
+    # Only dtypes provided
+    global_indices = [0, 1]
+    dtypes = {0: {"f1": "torch.int32"}, 1: {"f1": "torch.bool"}}
+
+    partition._update_field_metadata(global_indices, dtypes, shapes=None, custom_meta=None)
+    assert partition.field_dtypes[0]["f1"] == "torch.int32"
+    assert partition.field_dtypes[1]["f1"] == "torch.bool"
+    assert partition.field_shapes == {}
+    assert partition.field_custom_metas == {}
+
+    # Only shapes provided for a new index
+    partition._update_field_metadata([2], dtypes=None, shapes={2: {"f2": (16,)}}, custom_meta=None)
+    assert partition.field_shapes[2]["f2"] == (16,)
+
+    # Only custom_meta provided and merged with existing entries
+    partition._update_field_metadata([2], dtypes=None, shapes=None, custom_meta={2: {"f2": {"meta": 1}}})
+    assert 2 in partition.field_custom_metas
+    assert partition.field_custom_metas[2]["f2"]["meta"] == 1
+
+    # Merging dtypes on an existing index should preserve previous keys
+    partition._update_field_metadata([0], dtypes={0: {"f2": "torch.float32"}}, shapes=None, custom_meta=None)
+    assert partition.field_dtypes[0]["f1"] == "torch.int32"
+    assert partition.field_dtypes[0]["f2"] == "torch.float32"
+
+    # Length mismatch should raise ValueError when provided mapping lengths differ from global_indices
+    with pytest.raises(ValueError):
+        partition._update_field_metadata([0, 1, 2], dtypes={0: {}}, shapes=None, custom_meta=None)
+
+
+def test_get_production_status_for_fields():
+    """Test get_production_status_for_fields method with mask parameter."""
+    print("Testing get_production_status_for_fields...")
+
+    import torch
+
+    from transfer_queue.controller import DataPartitionStatus
+
+    partition = DataPartitionStatus(partition_id="production_status_test")
+
+    # Add some data first (using non-contiguous indices)
+    partition.update_production_status(
+        global_indices=[0, 1, 2, 3, 9],
+        field_names=["field_a", "field_b"],
+        dtypes={i: {"field_a": "torch.int64", "field_b": "torch.bool"} for i in [0, 1, 2, 3, 9]},
+        shapes={i: {"field_a": (32,), "field_b": (32,)} for i in [0, 1, 2, 3, 9]},
+    )
+
+    # Test get_production_status_for_fields WITHOUT mask (mask=False)
+    global_index, production_status = partition.get_production_status_for_fields(
+        field_names=["field_a", "field_b"], mask=False
+    )
+    assert torch.equal(global_index, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
+    # Without mask, should return all allocated samples
+    assert production_status.shape[0] == partition.allocated_samples_num
+    # Production status should be 1 for produced samples (0, 1, 2, 3, 9), 0 for others
+    # Check that produced samples have all fields produced (all 1s)
+    assert torch.all(production_status[0] == 1), "Sample 0 should be produced"
+    assert torch.all(production_status[1] == 1), "Sample 1 should be produced"
+    assert torch.all(production_status[2] == 1), "Sample 2 should be produced"
+    assert torch.all(production_status[3] == 1), "Sample 3 should be produced"
+    assert torch.all(production_status[9] == 1), "Sample 9 should be produced"
+    # Verify shape - should have 2 fields (columns)
+    assert production_status.shape[1] == 2
+
+    print("✓ get_production_status_for_fields without mask works")
+
+    # Test get_production_status_for_fields WITH mask (mask=True)
+    global_index_masked, production_status_masked = partition.get_production_status_for_fields(
+        field_names=["field_a", "field_b"], mask=True
+    )
+    assert torch.equal(global_index_masked, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
+    # Masked status should be same as original for these indices
+    assert production_status_masked.shape == (len([0, 1, 2, 3, 9]), 2)
+    # All returned samples should be produced
+    assert torch.all(production_status_masked == 1)
+
+    print("✓ get_production_status_for_fields with mask works")
+
+    # Test get_production_status_for_fields with subset of fields
+    global_index_subset, production_status_subset = partition.get_production_status_for_fields(
+        field_names=["field_a"], mask=True
+    )
+    assert global_index_subset.shape[0] == len([0, 1, 2, 3, 9])
+    assert production_status_subset.shape == (len([0, 1, 2, 3, 9]), 1)  # Only one field
+
+    print("✓ get_production_status_for_fields with subset fields works")
+
+    print("get_production_status_for_fields tests passed!\n")
+
+
+def test_get_consumption_status_parameter():
+    """Test get_consumption_status method with mask parameter."""
+    print("Testing consumption status mask parameter...")
+
+    import torch
+
+    from transfer_queue.controller import DataPartitionStatus
+
+    partition = DataPartitionStatus(partition_id="consumption_mask_test")
+    partition_another = DataPartitionStatus(partition_id="other_partition")
+
+    # Add some data
+    partition.update_production_status(
+        global_indices=[0, 1, 2, 3, 9],
+        field_names=["field_a"],
+        dtypes={i: {"field_a": "torch.int64"} for i in [0, 1, 2, 3, 9]},
+        shapes={i: {"field_a": (32,)} for i in [0, 1, 2, 3, 9]},
+    )
+
+    partition_another.update_production_status(
+        global_indices=[5, 6, 7],
+        field_names=["field_a"],
+        dtypes={i: {"field_a": "torch.int64"} for i in [5, 6, 7]},
+        shapes={i: {"field_a": (32,)} for i in [5, 6, 7]},
+    )
+
+    # Mark some samples as consumed
+    partition.mark_consumed("test_task", [0, 2])
+
+    # Test get_consumption_status WITHOUT mask (mask=False)
+    global_index, consumption_status = partition.get_consumption_status("test_task", mask=False)
+    assert global_index.shape[0] == partition.total_samples_num
+    assert torch.equal(global_index, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
+    # Without mask, should return all allocated samples
+    assert consumption_status.shape[0] == 10
+    assert consumption_status[0].item() == 1
+    assert consumption_status[1].item() == 0
+    assert consumption_status[2].item() == 1
+    assert consumption_status[3].item() == 0
+    assert consumption_status[4].item() == 0  # empty slot
+    assert consumption_status[5].item() == 0  # empty slot
+    assert consumption_status[6].item() == 0  # empty slot
+    assert consumption_status[7].item() == 0  # empty slot
+    assert consumption_status[8].item() == 0  # empty slot
+    assert consumption_status[9].item() == 0
+
+    print("✓ get_consumption_status without mask works")
+
+    # Test get_consumption_status WITH mask (mask=True)
+    global_index_masked, consumption_status_masked = partition.get_consumption_status("test_task", mask=True)
+    # With mask, should return only global_indexes [0, 1, 2, 3, 9]
+    assert global_index_masked.shape[0] == partition.total_samples_num
+    assert torch.equal(global_index_masked, torch.tensor([0, 1, 2, 3, 9], dtype=torch.long))
+    # Masked status shape[0] should correspond to global indexes
+    assert consumption_status_masked.shape[0] == partition.total_samples_num
+    assert consumption_status_masked[0].item() == 1
+    assert consumption_status_masked[1].item() == 0
+    assert consumption_status_masked[2].item() == 1
+    assert consumption_status_masked[3].item() == 0
+    assert consumption_status_masked[4].item() == 0  # no empty slot. this corresponds to global_index=9
+
+    print("✓ get_consumption_status with mask works")
+
+    print("Consumption status mask parameter tests passed!\n")

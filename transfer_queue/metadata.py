@@ -60,6 +60,18 @@ class FieldMeta:
         """Check if this field is ready for consumption"""
         return self.production_status == ProductionStatus.READY_FOR_CONSUME
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "FieldMeta":
+        """Create FieldMeta from dictionary."""
+        return cls(
+            name=data["name"],
+            dtype=data["dtype"],
+            shape=data["shape"],
+            production_status=ProductionStatus(str(data["production_status"]))
+            if isinstance(data["production_status"], (int, str))
+            else data["production_status"],
+        )
+
 
 @dataclass
 class SampleMeta:
@@ -125,8 +137,11 @@ class SampleMeta:
         selected_fields = {name: self.fields[name] for name in field_names if name in self.fields}
 
         # construct new SampleMeta instance
+        # TODO(tianyi): move custom_meta to FieldMeta level
         selected_sample_meta = SampleMeta(
-            fields=selected_fields, partition_id=self.partition_id, global_index=self.global_index
+            fields=selected_fields,
+            partition_id=self.partition_id,
+            global_index=self.global_index,
         )
 
         return selected_sample_meta
@@ -167,6 +182,19 @@ class SampleMeta:
         """Get production status for all fields (backward compatibility)"""
         return {name: field.production_status for name, field in self.fields.items()}
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "SampleMeta":
+        """Create SampleMeta from dictionary."""
+        fields = {
+            name: FieldMeta.from_dict(field_data) if isinstance(field_data, dict) else field_data
+            for name, field_data in data["fields"].items()
+        }
+        return cls(
+            partition_id=data["partition_id"],
+            global_index=data["global_index"],
+            fields=fields,
+        )
+
 
 @dataclass
 class BatchMeta:
@@ -174,6 +202,8 @@ class BatchMeta:
 
     samples: list[SampleMeta]
     extra_info: dict[str, Any] = dataclasses.field(default_factory=dict)
+    # internal data for different storage backends: _custom_meta[global_index][field]
+    _custom_meta: dict[int, dict[str, Any]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize all computed properties during initialization"""
@@ -229,6 +259,16 @@ class BatchMeta:
     def partition_ids(self) -> list[str]:
         """Get partition ids for all samples in this batch as a list (one per sample)"""
         return getattr(self, "_partition_ids", [])
+
+    # Custom meta methods for different storage backends
+    def get_all_custom_meta(self) -> dict[int, dict[str, Any]]:
+        """Get the entire custom meta dictionary"""
+        return copy.deepcopy(self._custom_meta)
+
+    def update_custom_meta(self, new_custom_meta: dict[int, dict[str, Any]] = None):
+        """Update custom meta with a new dictionary"""
+        if new_custom_meta:
+            self._custom_meta.update(new_custom_meta)
 
     # Extra info interface methods
     def get_extra_info(self, key: str, default: Any = None) -> Any:
@@ -579,6 +619,18 @@ class BatchMeta:
         return (
             f"BatchMeta(size={self.size}, field_names={self.field_names}, is_ready={self.is_ready}, "
             f"samples=[{sample_strs}], extra_info={self.extra_info})"
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BatchMeta":
+        """Create BatchMeta from dictionary."""
+        samples = [
+            SampleMeta.from_dict(sample_data) if isinstance(sample_data, dict) else sample_data
+            for sample_data in data["samples"]
+        ]
+        return cls(
+            samples=samples,
+            extra_info=data.get("extra_info", {}),
         )
 
 

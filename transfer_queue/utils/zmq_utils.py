@@ -24,7 +24,7 @@ from uuid import uuid4
 import psutil
 import zmq
 
-from transfer_queue.utils.serial_utils import deserialization, serialization
+from transfer_queue.utils.serial_utils import _encoder, _decoder
 from transfer_queue.utils.utils import (
     ExplicitEnum,
     TransferQueueRole,
@@ -72,12 +72,12 @@ class ZMQRequestType(ExplicitEnum):
     CLEAR_PARTITION = "CLEAR_PARTITION"
     CLEAR_PARTITION_RESPONSE = "CLEAR_PARTITION_RESPONSE"
 
-    # CHECK_CONSUMPTION
-    CHECK_CONSUMPTION = "CHECK_CONSUMPTION"
+    # GET_CONSUMPTION
+    GET_CONSUMPTION = "GET_CONSUMPTION"
     CONSUMPTION_RESPONSE = "CONSUMPTION_RESPONSE"
 
-    # CHECK_PRODUCTION
-    CHECK_PRODUCTION = "CHECK_PRODUCTION"
+    # GET_PRODUCTION
+    GET_PRODUCTION = "GET_PRODUCTION"
     PRODUCTION_RESPONSE = "PRODUCTION_RESPONSE"
 
     # LIST_PARTITIONS
@@ -138,18 +138,38 @@ class ZMQMessage:
             timestamp=time.time(),
         )
 
-    def serialize(
-        self,
-    ) -> list[bytestr]:
+    def serialize(self) -> list:
         """
-        Serializes the ZMQMessage object.
+        Serialize message using unified MsgpackEncoder.
+        Returns: list[bytestr] - [msgpack_header, *tensor_buffers]
         """
-        return serialization(self)
+        msg_dict = {
+            "request_type": self.request_type.value,  # Enum -> str for msgpack
+            "sender_id": self.sender_id,
+            "receiver_id": self.receiver_id,
+            "request_id": self.request_id,
+            "timestamp": self.timestamp,
+            "body": self.body,
+        }
+        return list(_encoder.encode(msg_dict))
 
     @classmethod
-    def deserialize(cls, data: list[bytestr] | bytestr) -> "ZMQMessage":
-        """Deserialize a ZMQMessage object from serialized data."""
-        return deserialization(data)
+    def deserialize(cls, frames: list) -> "ZMQMessage":
+        """
+        Deserialize message using unified MsgpackDecoder.
+        """
+        if not frames:
+            raise ValueError("Empty frames received")
+
+        msg_dict = _decoder.decode(frames)
+        return cls(
+            request_type=ZMQRequestType(msg_dict["request_type"]),
+            sender_id=msg_dict["sender_id"],
+            receiver_id=msg_dict["receiver_id"],
+            body=msg_dict["body"],
+            request_id=msg_dict["request_id"],
+            timestamp=msg_dict["timestamp"],
+        )
 
 
 def get_free_port() -> str:

@@ -21,9 +21,11 @@ from typing import Any, Callable, Optional, Union
 from uuid import uuid4
 
 import ray
+import torch
 import zmq
 import zmq.asyncio
 from tensordict import TensorDict
+from torch import Tensor
 
 from transfer_queue.controller import TransferQueueController
 from transfer_queue.metadata import (
@@ -242,8 +244,8 @@ class AsyncTransferQueueClient:
             )
 
             if response_msg.request_type == ZMQRequestType.GET_META_RESPONSE:
-                metadata = response_msg.body["metadata"]
-                return metadata
+                metadata_dict = response_msg.body["metadata"]
+                return BatchMeta.from_dict(metadata_dict) if isinstance(metadata_dict, dict) else metadata_dict
             else:
                 raise RuntimeError(
                     f"[{self.client_id}]: Failed to get metadata from controller {self._controller.id}: "
@@ -507,7 +509,7 @@ class AsyncTransferQueueClient:
         if response_msg.request_type != ZMQRequestType.GET_PARTITION_META_RESPONSE:
             raise RuntimeError("Failed to get metadata for clear operation.")
 
-        return response_msg.body["metadata"]
+        return BatchMeta.from_dict(response_msg.body["metadata"]) if isinstance(response_msg.body["metadata"], dict) else response_msg.body["metadata"]
 
     @dynamic_socket(socket_name="request_handle_socket")
     async def _clear_partition_in_controller(self, partition_id, socket=None):
@@ -536,18 +538,140 @@ class AsyncTransferQueueClient:
             raise RuntimeError(f"Failed to clear partition {partition_id} in controller.")
 
     @dynamic_socket(socket_name="request_handle_socket")
-    async def async_check_consumption_status(
+    async def async_get_consumption_status(
         self,
         task_name: str,
         partition_id: str,
         socket: Optional[zmq.asyncio.Socket] = None,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Get consumption status for current partition in a specific task.
+
+        Args:
+            task_name: Name of the task to check consumption for
+            partition_id: Partition id to check consumption status for
+            socket: ZMQ async socket for message transmission (injected by decorator)
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Consumption status tensor for the specified task. 1 for consumed, 0 for not consumed.
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
+        Example:
+            >>> # Get consumption status
+            >>> global_index, consumption_status = asyncio.run(client.async_get_consumption_status(
+            ...     task_name="generate_sequences",
+            ...     partition_id="train_0"
+            ... ))
+            >>> print(f"Global index: {global_index}, Consumption status: {consumption_status}")
+        """
+
+        assert socket is not None
+        request_msg = ZMQMessage.create(
+            request_type=ZMQRequestType.GET_CONSUMPTION,
+            sender_id=self.client_id,
+            receiver_id=self._controller.id,
+            body={
+                "partition_id": partition_id,
+                "task_name": task_name,
+            },
+        )
+
+        try:
+            await socket.send_multipart(request_msg.serialize())
+            response_serialized = await socket.recv_multipart()
+            response_msg = ZMQMessage.deserialize(response_serialized)
+            logger.debug(
+                f"[{self.client_id}]: Client get consumption response: {response_msg} "
+                f"from controller {self._controller.id}"
+            )
+
+            if response_msg.request_type == ZMQRequestType.CONSUMPTION_RESPONSE:
+                global_index = response_msg.body.get("global_index")
+                consumption_status = response_msg.body.get("consumption_status")
+                return global_index, consumption_status
+            else:
+                raise RuntimeError(
+                    f"[{self.client_id}]: Failed to get consumption status from controller {self._controller.id}: "
+                    f"{response_msg.body.get('message', 'Unknown error')}"
+                )
+        except Exception as e:
+            raise RuntimeError(f"[{self.client_id}]: Error in get_consumption_status: {str(e)}") from e
+
+    @dynamic_socket(socket_name="request_handle_socket")
+    async def async_get_production_status(
+        self,
+        data_fields: list[str],
+        partition_id: str,
+        socket: Optional[zmq.asyncio.Socket] = None,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Get production status for current partition for specific fields.
+
+        Args:
+            data_fields: Data fields to check production status for
+            partition_id: Partition id to check production status for
+            socket: ZMQ async socket for message transmission (injected by decorator)
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Production status tensor for the specified fields. 1 for ready, 0 for not ready.
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
+        Example:
+            >>> # Get production status
+            >>> global_index, production_status = asyncio.run(client.async_get_production_status(
+            ...     data_fields=["input_ids", "attention_mask"],
+            ...     partition_id="train_0"
+            ... ))
+            >>> print(f"Global index: {global_index}, Production status: {production_status}")
+        """
+        assert socket is not None
+        request_msg = ZMQMessage.create(
+            request_type=ZMQRequestType.GET_PRODUCTION,
+            sender_id=self.client_id,
+            receiver_id=self._controller.id,
+            body={
+                "partition_id": partition_id,
+                "data_fields": data_fields,
+            },
+        )
+
+        try:
+            await socket.send_multipart(request_msg.serialize())
+            response_serialized = await socket.recv_multipart()
+            response_msg = ZMQMessage.deserialize(response_serialized)
+            logger.debug(
+                f"[{self.client_id}]: Client get production response: {response_msg} "
+                f"from controller {self._controller.id}"
+            )
+
+            if response_msg.request_type == ZMQRequestType.PRODUCTION_RESPONSE:
+                global_index = response_msg.body.get("global_index")
+                production_status = response_msg.body.get("production_status")
+                return global_index, production_status
+            else:
+                raise RuntimeError(
+                    f"[{self.client_id}]: Failed to get production status from controller {self._controller.id}: "
+                    f"{response_msg.body.get('message', 'Unknown error')}"
+                )
+        except Exception as e:
+            raise RuntimeError(f"[{self.client_id}]: Error in get_data_production_status: {str(e)}") from e
+
+    async def async_check_consumption_status(
+        self,
+        task_name: str,
+        partition_id: str,
     ) -> bool:
         """Check if all samples for current partition have been consumed by a specific task.
 
         Args:
             task_name: Name of the task to check consumption for
             partition_id: Partition id to check consumption status for
-            socket: ZMQ async socket for message transmission (injected by decorator)
 
         Returns:
             bool: True if all samples have been consumed by the task, False otherwise
@@ -563,50 +687,27 @@ class AsyncTransferQueueClient:
             ... ))
             >>> print(f"All samples consumed: {is_consumed}")
         """
-        assert socket is not None
-        request_msg = ZMQMessage.create(
-            request_type=ZMQRequestType.CHECK_CONSUMPTION,
-            sender_id=self.client_id,
-            receiver_id=self._controller.id,
-            body={
-                "partition_id": partition_id,
-                "task_name": task_name,
-            },
+
+        _, consumption_status = await self.async_get_consumption_status(
+            task_name=task_name,
+            partition_id=partition_id,
         )
 
-        try:
-            await socket.send_multipart(request_msg.serialize())
-            response_serialized = await socket.recv_multipart()
-            response_msg = ZMQMessage.deserialize(response_serialized)
-            logger.debug(
-                f"[{self.client_id}]: Client check consumption response: {response_msg} "
-                f"from controller {self._controller.id}"
-            )
+        if consumption_status is None:
+            return False
+        return torch.all(consumption_status == 1).item()
 
-            if response_msg.request_type == ZMQRequestType.CONSUMPTION_RESPONSE:
-                consumed = response_msg.body.get("consumed", False)
-                return consumed
-            else:
-                raise RuntimeError(
-                    f"[{self.client_id}]: Failed to check consumption status from controller {self._controller.id}: "
-                    f"{response_msg.body.get('message', 'Unknown error')}"
-                )
-        except Exception as e:
-            raise RuntimeError(f"[{self.client_id}]: Error in check_data_consumption_status: {str(e)}") from e
-
-    @dynamic_socket(socket_name="request_handle_socket")
     async def async_check_production_status(
         self,
         data_fields: list[str],
         partition_id: str,
-        socket: Optional[zmq.asyncio.Socket] = None,
     ) -> bool:
-        """Check if all samples for current partition are ready (produced) for consumption.
+        """Check if the all specific fields of samples for current partition are ready
+        (produced) for consumption.
 
         Args:
             data_fields: Data fields to check production status for
             partition_id: Partition id to check production status for
-            socket: ZMQ async socket for message transmission (injected by decorator)
 
         Returns:
             bool: True if all samples have been produced and ready, False otherwise
@@ -622,36 +723,14 @@ class AsyncTransferQueueClient:
             ... ))
             >>> print(f"All samples ready: {is_ready}")
         """
-        assert socket is not None
-        request_msg = ZMQMessage.create(
-            request_type=ZMQRequestType.CHECK_PRODUCTION,
-            sender_id=self.client_id,
-            receiver_id=self._controller.id,
-            body={
-                "partition_id": partition_id,
-                "data_fields": data_fields,
-            },
+        _, production_status = await self.async_get_production_status(
+            data_fields=data_fields,
+            partition_id=partition_id,
         )
 
-        try:
-            await socket.send_multipart(request_msg.serialize())
-            response_serialized = await socket.recv_multipart()
-            response_msg = ZMQMessage.deserialize(response_serialized)
-            logger.debug(
-                f"[{self.client_id}]: Client check production response: {response_msg} "
-                f"from controller {self._controller.id}"
-            )
-
-            if response_msg.request_type == ZMQRequestType.PRODUCTION_RESPONSE:
-                produced = response_msg.body.get("produced", False)
-                return produced
-            else:
-                raise RuntimeError(
-                    f"[{self.client_id}]: Failed to check production status from controller {self._controller.id}: "
-                    f"{response_msg.body.get('message', 'Unknown error')}"
-                )
-        except Exception as e:
-            raise RuntimeError(f"[{self.client_id}]: Error in check_data_production_status: {str(e)}") from e
+        if production_status is None:
+            return False
+        return torch.all(production_status == 1).item()
 
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_get_partition_list(
@@ -811,6 +890,31 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
         return asyncio.run(self.async_check_consumption_status(task_name, partition_id))
 
+    def get_consumption_status(
+        self,
+        task_name: str,
+        partition_id: str,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Synchronously get consumption status for a specific task and partition.
+
+        Args:
+            task_name: Name of the task to check consumption for
+            partition_id: Partition id to check consumption status for
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Consumption status tensor for the specified task. 1 for consumed, 0 for not consumed.
+
+        Example:
+            >>> global_index, consumption_status = client.get_consumption_status(
+            ...     task_name="generate_sequences",
+            ...     partition_id="train_0"
+            ... )
+            >>> print(f"Global index: {global_index}, Consumption status: {consumption_status}")
+        """
+        return asyncio.run(self.async_get_consumption_status(task_name, partition_id))
+
     def check_production_status(self, data_fields: list[str], partition_id: str) -> bool:
         """Synchronously check if all samples for a partition are ready (produced) for consumption.
 
@@ -822,6 +926,31 @@ class TransferQueueClient(AsyncTransferQueueClient):
             bool: True if all samples have been produced and ready, False otherwise
         """
         return asyncio.run(self.async_check_production_status(data_fields, partition_id))
+
+    def get_production_status(
+        self,
+        data_fields: list[str],
+        partition_id: str,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Synchronously get production status for a specific data fields and partition.
+
+        Args:
+            data_fields: Data fields to check production status for
+            partition_id: Partition id to check production status for
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Production status tensor for the specified fields. 1 for ready, 0 for not ready.
+
+        Example:
+            >>> global_index, production_status = client.get_production_status(
+            ...     data_fields=["input_ids", "attention_mask"],
+            ...     partition_id="train_0"
+            ... )
+            >>> print(f"Global index: {global_index}, Production status: {production_status}")
+        """
+        return asyncio.run(self.async_get_production_status(data_fields, partition_id))
 
     def get_partition_list(
         self,
