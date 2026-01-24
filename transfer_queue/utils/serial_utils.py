@@ -21,7 +21,7 @@ import pickle
 import warnings
 from collections.abc import Sequence
 from types import FunctionType
-from typing import Any, Optional, TypeAlias
+from typing import Any, TypeAlias
 
 import cloudpickle
 import numpy as np
@@ -29,7 +29,6 @@ import torch
 import zmq
 from msgspec import msgpack
 from tensordict import TensorDictBase
-
 
 CUSTOM_TYPE_PICKLE = 1
 CUSTOM_TYPE_CLOUDPICKLE = 2
@@ -58,7 +57,7 @@ class MsgpackEncoder:
         # This is used as a local stash of buffers that we can then access from
         # our custom `msgspec` hook, `enc_hook`. We don't have a way to
         # pass custom data to the hook otherwise.
-        self.aux_buffers: Optional[list[bytestr]] = None
+        self.aux_buffers: list[bytestr] = []
 
     def encode(self, obj: Any) -> Sequence[bytestr]:
         try:
@@ -70,7 +69,7 @@ class MsgpackEncoder:
             # new buffer.
             return bufs
         finally:
-            self.aux_buffers = None
+            self.aux_buffers = []
 
     def encode_into(self, obj: Any, buf: bytearray) -> Sequence[bytestr]:
         try:
@@ -79,7 +78,7 @@ class MsgpackEncoder:
             self.encoder.encode_into(obj, buf)
             return bufs
         finally:
-            self.aux_buffers = None
+            self.aux_buffers = []
 
     def enc_hook(self, obj: Any) -> Any:
         """Custom encoding hook for types msgspec doesn't natively support.
@@ -95,7 +94,6 @@ class MsgpackEncoder:
         # Handle TensorDict explicitly for recursive zero-copy
         if isinstance(obj, TensorDictBase):
             return self._encode_tensordict(obj)
-        
 
         # Handle numpy arrays by converting to tensor
         if isinstance(obj, np.ndarray):
@@ -136,7 +134,7 @@ class MsgpackEncoder:
 
         Returns Ext type so decoding goes through ext_hook (which has buffer access).
         """
-        assert self.aux_buffers is not None
+        assert len(self.aux_buffers) > 0
 
         # Handle nested tensors (strided or jagged) via unbind
         if obj.is_nested:
@@ -167,11 +165,14 @@ class MsgpackEncoder:
     def _encode_regular_tensor_meta(self, obj: torch.Tensor) -> tuple:
         """Encode a regular tensor and return its metadata tuple."""
         # Handle non-contiguous tensors
+
+        assert self.aux_buffers is not None
+
         if not obj.is_contiguous():
             obj = obj.contiguous()
 
         # Handle GPU tensors
-        if obj.device.type != 'cpu':
+        if obj.device.type != "cpu":
             obj = obj.cpu()
 
         # Zero-copy buffer extraction via uint8 view
@@ -186,11 +187,14 @@ class MsgpackEncoder:
     def _encode_regular_tensor(self, obj: torch.Tensor) -> msgpack.Ext:
         """Encode a regular (non-nested) tensor with zero-copy."""
         # Handle non-contiguous tensors
+
+        assert self.aux_buffers is not None
+
         if not obj.is_contiguous():
             obj = obj.contiguous()
 
         # Handle GPU tensors
-        if obj.device.type != 'cpu':
+        if obj.device.type != "cpu":
             obj = obj.cpu()
 
         if obj.is_sparse:
@@ -251,6 +255,7 @@ class MsgpackDecoder:
         """Reconstruct TensorDict from marked dict structure."""
         try:
             from tensordict import TensorDict
+
             batch_size = obj["batch_size"]
             data = obj["data"]
             # Recursively process nested data
@@ -305,4 +310,3 @@ class MsgpackDecoder:
 
 _encoder = MsgpackEncoder()
 _decoder = MsgpackDecoder()
-

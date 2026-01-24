@@ -24,7 +24,7 @@ from uuid import uuid4
 import psutil
 import zmq
 
-from transfer_queue.utils.serial_utils import _encoder, _decoder
+from transfer_queue.utils.serial_utils import _decoder, _encoder
 from transfer_queue.utils.utils import (
     ExplicitEnum,
     TransferQueueRole,
