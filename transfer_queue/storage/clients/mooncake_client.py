@@ -133,7 +133,7 @@ class MooncakeStorageClient(TransferQueueStorageKVClient):
                 raise RuntimeError(f"put_batch failed with error code: {ret}")
 
     def get(self, keys: list[str], shapes=None, dtypes=None, custom_meta=None) -> list[Any]:
-        """Get multiple key-value pairs to MooncakeStore.
+        """Get multiple key-value pairs from MooncakeStore.
 
         Args:
             keys (List[str]): Keys to fetch.

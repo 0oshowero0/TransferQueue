@@ -188,7 +188,7 @@ class ZMQMessage:
 
 
 def get_free_port() -> str:
-    """Get free port of the host"""
+    """Get free port of the host."""
     with socket.socket() as sock:
         sock.bind(("", 0))
         return sock.getsockname()[1]

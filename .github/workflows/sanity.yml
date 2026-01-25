@@ -46,9 +46,9 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install dist/*.whl
       - name: Run license test
-        run:
+        run: |
           python3 tests/sanity/check_license.py --directories .
       - name: Check docstrings for specified files
-        run:
+        run: |
           python3 tests/sanity/check_docstrings.py
 

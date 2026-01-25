@@ -48,7 +48,7 @@ class ExplicitEnum(str, Enum):
 
 
 class TransferQueueRole(ExplicitEnum):
-    """Available Roles of TansferQueue."""
+    """Available Roles of TransferQueue."""
 
     CONTROLLER = "TransferQueueController"
     STORAGE = "TransferQueueStorage"
@@ -156,7 +156,7 @@ def limit_pytorch_auto_parallel_threads(target_num_threads: Optional[int] = None
 
 
 def get_env_bool(env_key: str, default: bool = False) -> bool:
-    """Robustly get a boolean from an environment variable"""
+    """Robustly get a boolean from an environment variable."""
     env_value = os.getenv(env_key)
 
     if env_value is None:

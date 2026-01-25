@@ -27,13 +27,13 @@ license_headers = [
 
 
 def get_py_files(path_arg: Path) -> Iterable[Path]:
-    """get py files under a dir. if already py file return it
+    """Get Python files under a directory. If already a Python file, return it.
 
     Args:
-        path_arg (Path): path to scan for py files
+        path_arg (Path): path to scan for .py files
 
     Returns:
-        Iterable[Path]: list of py files
+        Iterable[Path]: list of .py files
     """
     if path_arg.is_dir():
         return path_arg.glob("**/*.py")
