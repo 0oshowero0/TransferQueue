@@ -272,14 +272,36 @@ class TransferQueueStorageManager(ABC):
 
     @abstractmethod
     async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
+        """
+        Put data into the storage backend.
+
+        Args:
+            data: Data to be put into the storage.
+            metadata: BatchMeta of the corresponding data.
+        """
         raise NotImplementedError("Subclasses must implement put_data")
 
     @abstractmethod
     async def get_data(self, metadata: BatchMeta) -> TensorDict:
+        """
+        Get data from the storage backend.
+
+        Args:
+            metadata: BatchMeta of the data to be retrieved from the storage.
+
+        Returns:
+            TensorDict containing the data retrieved from the storage.
+        """
         raise NotImplementedError("Subclasses must implement get_data")
 
     @abstractmethod
     async def clear_data(self, metadata: BatchMeta) -> None:
+        """
+        Clear data from the storage backend.
+
+        Args:
+            metadata: BatchMeta of the data to be cleared from the storage.
+        """
         raise NotImplementedError("Subclasses must implement clear_data")
 
     def close(self) -> None:

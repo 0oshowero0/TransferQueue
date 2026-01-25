@@ -25,6 +25,8 @@ class TransferQueueStorageManagerFactory:
 
     @classmethod
     def register(cls, manager_type: str):
+        """Register a TransferQueueStorageManager class."""
+
         def decorator(manager_cls: type[TransferQueueStorageManager]):
             if not issubclass(manager_cls, TransferQueueStorageManager):
                 raise TypeError(
@@ -38,6 +40,7 @@ class TransferQueueStorageManagerFactory:
 
     @classmethod
     def create(cls, manager_type: str, config: dict[str, Any]) -> TransferQueueStorageManager:
+        """Create and return a TransferQueueStorageManager instance."""
         if manager_type not in cls._registry:
             raise ValueError(
                 f"Unknown manager_type: {manager_type}. Supported managers include: {list(cls._registry.keys())}"

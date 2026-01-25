@@ -32,6 +32,8 @@ if not logger.hasHandlers():
 
 @TransferQueueStorageManagerFactory.register("YuanrongStorageManager")
 class YuanrongStorageManager(KVStorageManager):
+    """Storage manager for Yuanrong backend."""
+
     def __init__(self, config: dict[str, Any]):
         host = config.get("host", None)
         port = config.get("port", None)

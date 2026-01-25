@@ -60,6 +60,7 @@ class MsgpackEncoder:
         self.aux_buffers: list[bytestr] = []
 
     def encode(self, obj: Any) -> Sequence[bytestr]:
+        """Encode a given object to a byte array."""
         try:
             self.aux_buffers = bufs = [b""]
             bufs[0] = self.encoder.encode(obj)
@@ -67,15 +68,6 @@ class MsgpackEncoder:
             # buffers of tensors and np arrays, and return them along with the
             # top-level encoded buffer instead of copying their data into the
             # new buffer.
-            return bufs
-        finally:
-            self.aux_buffers = []
-
-    def encode_into(self, obj: Any, buf: bytearray) -> Sequence[bytestr]:
-        try:
-            self.aux_buffers = [buf]
-            bufs = self.aux_buffers
-            self.encoder.encode_into(obj, buf)
             return bufs
         finally:
             self.aux_buffers = []
@@ -221,6 +213,7 @@ class MsgpackDecoder:
         self.aux_buffers: Sequence[bytestr] = ()
 
     def decode(self, bufs: bytestr | Sequence[bytestr]) -> Any:
+        """Decode a list of bytes."""
         if isinstance(bufs, bytestr):
             result = self.decoder.decode(bufs)
         else:
@@ -290,6 +283,13 @@ class MsgpackDecoder:
             return torch.nested.as_nested_tensor(sub_tensors, layout=torch.strided)
 
     def ext_hook(self, code: int, data: memoryview) -> Any:
+        """Custom decoding hook for types msgspec doesn't natively support.
+
+        For zero-copy tensor serialization, we need to handle:
+        - torch.Tensor: Extract buffer, store metadata
+        - TensorDict: Convert to dict structure for recursive processing
+        - numpy.ndarray: Convert to tensor for unified handling
+        """
         if code == CUSTOM_TYPE_PICKLE:
             return pickle.loads(data)
         if code == CUSTOM_TYPE_CLOUDPICKLE:
