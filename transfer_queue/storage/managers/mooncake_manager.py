@@ -26,6 +26,8 @@ logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 @TransferQueueStorageManagerFactory.register("MooncakeStorageManager")
 class MooncakeStorageManager(KVStorageManager):
+    """Storage manager for MooncakeStorage backend."""
+
     def __init__(self, config: dict[str, Any]):
         # Required: Address of the HTTP metadata server (e.g., "localhost:8080")
         metadata_server = config.get("metadata_server", None)

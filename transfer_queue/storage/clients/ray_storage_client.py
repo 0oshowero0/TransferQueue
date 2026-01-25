@@ -25,17 +25,22 @@ from transfer_queue.storage.clients.factory import StorageClientFactory
 
 @ray.remote(max_concurrency=8)
 class RayObjectRefStorage:
+    """Ray object ref storage."""
+
     def __init__(self):
         self.storage_dict = {}
 
     def put_obj_ref(self, keys: list[str], obj_refs: list[ray.ObjectRef]):
+        """Put object ref to remote storage."""
         self.storage_dict.update(itertools.starmap(lambda k, v: (k, v), zip(keys, obj_refs, strict=True)))
 
     def get_obj_ref(self, keys: list[str]) -> list[ray.ObjectRef]:
+        """Get object ref from remote storage."""
         obj_refs = [self.storage_dict.get(key, None) for key in keys]
         return obj_refs
 
     def clear_obj_ref(self, keys: list[str]):
+        """Clear object ref from remote storage."""
         for key in keys:
             if key in self.storage_dict:
                 del self.storage_dict[key]
@@ -43,6 +48,10 @@ class RayObjectRefStorage:
 
 @StorageClientFactory.register("RayStorageClient")
 class RayStorageClient(TransferQueueStorageKVClient):
+    """
+    Storage client for Ray RDT.
+    """
+
     def __init__(self, config=None):
         if not ray.is_initialized():
             raise RuntimeError("Ray is not initialized. Please call ray.init() before creating RayStorageClient.")

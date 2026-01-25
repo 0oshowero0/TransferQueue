@@ -44,6 +44,10 @@ bytestr: TypeAlias = bytes | bytearray | memoryview
 
 
 class ZMQRequestType(ExplicitEnum):
+    """
+    Enumerate all available request types in TransferQueue.
+    """
+
     # HANDSHAKE
     HANDSHAKE = "HANDSHAKE"  # TransferQueueStorageUnit -> TransferQueueController
     HANDSHAKE_ACK = "HANDSHAKE_ACK"  # TransferQueueController  -> TransferQueueStorageUnit
@@ -91,6 +95,10 @@ class ZMQRequestType(ExplicitEnum):
 
 
 class ZMQServerInfo:
+    """
+    TransferQueue server info class.
+    """
+
     def __init__(self, role: TransferQueueRole, id: str, ip: str, ports: dict[str, str]):
         self.role = role
         self.id = id
@@ -98,9 +106,11 @@ class ZMQServerInfo:
         self.ports = ports
 
     def to_addr(self, port_name: str) -> str:
+        """Convert zmq port name to address string."""
         return f"tcp://{self.ip}:{self.ports[port_name]}"
 
     def to_dict(self):
+        """Convert ZMQServerInfo to dict."""
         return {
             "role": self.role,
             "id": self.id,
@@ -114,6 +124,10 @@ class ZMQServerInfo:
 
 @dataclass
 class ZMQMessage:
+    """
+    ZMQMessage class for TransferQueue communication.
+    """
+
     request_type: ZMQRequestType
     sender_id: str
     receiver_id: str | None
@@ -129,6 +143,7 @@ class ZMQMessage:
         body: dict[str, Any],
         receiver_id: Optional[str] = None,
     ) -> "ZMQMessage":
+        """Create ZMQMessage."""
         return cls(
             request_type=request_type,
             sender_id=sender_id,
@@ -173,6 +188,7 @@ class ZMQMessage:
 
 
 def get_free_port() -> str:
+    """Get free port of the host"""
     with socket.socket() as sock:
         sock.bind(("", 0))
         return sock.getsockname()[1]
@@ -183,6 +199,7 @@ def create_zmq_socket(
     socket_type: Any,
     identity: Optional[bytestr] = None,
 ) -> zmq.Socket:
+    """Create ZMQ socket."""
     mem = psutil.virtual_memory()
     socket = ctx.socket(socket_type)
 

@@ -87,19 +87,24 @@ def check_file_docstrings(filepath: str) -> list[tuple[str, str, int]]:
         return []
 
 
-def main():
-    """Main function to check docstrings in specified files."""
+def get_python_files_in_transfer_queue(repo_path: str) -> list[str]:
+    """Get all Python files in the transfer_queue directory."""
+    transfer_queue_path = os.path.join(repo_path, "transfer_queue")
+    if not os.path.exists(transfer_queue_path):
+        print(f"Warning: transfer_queue directory {transfer_queue_path} does not exist!")
+        return []
 
-    files_to_check = [
-        "verl/trainer/ppo/ray_trainer.py",
-        "verl/trainer/main_ppo.py",
-        "verl/trainer/ppo/reward.py",
-        "verl/utils/reward_score/__init__.py",
-        "verl/trainer/ppo/core_algos.py",
-        "verl/experimental/agent_loop/agent_loop.py",
-        "verl/workers/sharding_manager/fsdp_vllm.py",
-        "verl/workers/sharding_manager/fsdp_ulysses.py",
-    ]
+    python_files = []
+    for root, _, files in os.walk(transfer_queue_path):
+        for file in files:
+            if file.endswith(".py"):
+                python_files.append(os.path.join(root, file))
+
+    return sorted(python_files)
+
+
+def main():
+    """Main function to check docstrings in transfer_queue Python files."""
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repo_path = os.path.dirname(os.path.dirname(script_dir))
@@ -110,9 +115,16 @@ def main():
 
     os.chdir(repo_path)
 
+    files_to_check = get_python_files_in_transfer_queue(repo_path)
+
+    if not files_to_check:
+        print("No Python files found in transfer_queue directory!")
+        sys.exit(1)
+
     all_missing_docstrings = []
 
-    print("Checking docstrings in specified files...")
+    print("Checking docstrings in transfer_queue Python files...")
+    print(f"Found {len(files_to_check)} Python files to check")
     print("=" * 60)
 
     for file_path in files_to_check:

@@ -2,8 +2,7 @@
 name: sanity
 
 on:
-  # Trigger the workflow on push or pull request,
-  # but only for the main branch
+  # Trigger the workflow on push or pull request
   push:
     branches:
       - main

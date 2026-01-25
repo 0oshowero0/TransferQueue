@@ -83,9 +83,11 @@ class YuanrongStorageClient(TransferQueueStorageKVClient):
         self._cpu_ds_client.init()
 
     def npu_ds_client_is_available(self):
+        """Check if NPU client is available."""
         return self._npu_ds_client is not None
 
     def cpu_ds_client_is_available(self):
+        """Check if CPU client is available."""
         return self._cpu_ds_client is not None
 
     def _create_empty_npu_tensorlist(self, shapes, dtypes):

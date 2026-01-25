@@ -38,6 +38,10 @@ BATCH_SIZE_LIMIT: int = 500
 
 @StorageClientFactory.register("MooncakeStorageClient")
 class MooncakeStorageClient(TransferQueueStorageKVClient):
+    """
+    Storage client for MooncakeStore.
+    """
+
     def __init__(self, config: dict[str, Any]):
         if not MOONCAKE_STORE_IMPORTED:
             raise ImportError("Mooncake Store not installed. Please install via: pip install mooncake-transfer-engine")
@@ -69,6 +73,13 @@ class MooncakeStorageClient(TransferQueueStorageKVClient):
             raise RuntimeError(f"Mooncake store setup failed with error code: {ret}")
 
     def put(self, keys: list[str], values: list[Any]) -> Optional[list[Any]]:
+        """Stores multiple key-value pairs to MooncakeStore.
+
+        Args:
+            keys (List[str]): List of unique string identifiers.
+            values (List[Any]): List of values to store (tensors, scalars, dicts, etc.).
+        """
+
         if not isinstance(keys, list) or not isinstance(values, list):
             raise ValueError("keys and values must be lists")
         if len(keys) != len(values):
@@ -122,6 +133,18 @@ class MooncakeStorageClient(TransferQueueStorageKVClient):
                 raise RuntimeError(f"put_batch failed with error code: {ret}")
 
     def get(self, keys: list[str], shapes=None, dtypes=None, custom_meta=None) -> list[Any]:
+        """Get multiple key-value pairs to MooncakeStore.
+
+        Args:
+            keys (List[str]): Keys to fetch.
+            shapes (List[List[int]]): Expected tensor shapes (use [] for scalars).
+            dtypes (List[Optional[torch.dtype]]): Expected dtypes; use None for non-tensor data.
+            custom_meta (List[str], optional): Device type (npu/cpu) for each key
+
+        Returns:
+            List[Any]: Retrieved values in the same order as input keys.
+        """
+
         if shapes is None or dtypes is None:
             raise ValueError("MooncakeStorageClient needs shapes and dtypes")
         if not (len(keys) == len(shapes) == len(dtypes)):
@@ -194,12 +217,18 @@ class MooncakeStorageClient(TransferQueueStorageKVClient):
         return results
 
     def clear(self, keys: list[str]):
+        """Deletes multiple keys from MooncakeStore.
+
+        Args:
+            keys (List[str]): List of keys to remove.
+        """
         for key in keys:
             ret = self._store.remove(key)
             if ret != 0:
                 logger.warning(f"remove failed for key '{key}' with error code: {ret}")
 
     def close(self):
+        """Closes MooncakeStore."""
         if self._store:
             self._store.close()
             self._store = None

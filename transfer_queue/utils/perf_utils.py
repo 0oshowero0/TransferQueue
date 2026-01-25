@@ -113,6 +113,7 @@ class IntervalPerfMonitor:
 
     @contextmanager
     def measure(self, op_type: str):
+        """Measures performance statistics."""
         start_time = time.perf_counter()
         try:
             yield
