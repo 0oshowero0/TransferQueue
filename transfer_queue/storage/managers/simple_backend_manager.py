@@ -455,10 +455,10 @@ def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: TensorDict)
             result = (result,)
         results[fname] = list(result)
 
-    if not TQ_ZERO_COPY_SERIALIZATION:
-        # Explicitly copy tensor slices to prevent pickling the whole tensor for every storage unit.
-        # The tensors may still be contiguous, so we cannot use .contiguous() to trigger copy from parent tensors.
-        results[fname] = [item.clone() if isinstance(item, torch.Tensor) else item for item in results[fname]]
+        if not TQ_ZERO_COPY_SERIALIZATION:
+            # Explicitly copy tensor slices to prevent pickling the whole tensor for every storage unit.
+            # The tensors may still be contiguous, so we cannot use .contiguous() to trigger copy from parent tensors.
+            results[fname] = [item.clone() if isinstance(item, torch.Tensor) else item for item in results[fname]]
     return results
 
 
