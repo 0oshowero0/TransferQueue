@@ -15,6 +15,7 @@
 
 import logging
 import os
+import pickle
 import socket
 import time
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from transfer_queue.utils.serial_utils import _decoder, _encoder
 from transfer_queue.utils.utils import (
     ExplicitEnum,
     TransferQueueRole,
+    get_env_bool,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ if not logger.hasHandlers():
 
 
 bytestr: TypeAlias = bytes | bytearray | memoryview
+
+TQ_ZERO_COPY_SERIALIZATION = get_env_bool("TQ_ZERO_COPY_SERIALIZATION", default=False)
 
 
 class ZMQRequestType(ExplicitEnum):
@@ -155,36 +159,42 @@ class ZMQMessage:
 
     def serialize(self) -> list:
         """
-        Serialize message using unified MsgpackEncoder.
-        Returns: list[bytestr] - [msgpack_header, *tensor_buffers]
+        Serialize message using unified MsgpackEncoder or pickle.
+        Returns: list[bytestr] - [msgpack_header, *tensor_buffers] or [bytes]
         """
-        msg_dict = {
-            "request_type": self.request_type.value,  # Enum -> str for msgpack
-            "sender_id": self.sender_id,
-            "receiver_id": self.receiver_id,
-            "request_id": self.request_id,
-            "timestamp": self.timestamp,
-            "body": self.body,
-        }
-        return list(_encoder.encode(msg_dict))
+        if TQ_ZERO_COPY_SERIALIZATION:
+            msg_dict = {
+                "request_type": self.request_type.value,  # Enum -> str for msgpack
+                "sender_id": self.sender_id,
+                "receiver_id": self.receiver_id,
+                "request_id": self.request_id,
+                "timestamp": self.timestamp,
+                "body": self.body,
+            }
+            return list(_encoder.encode(msg_dict))
+        else:
+            return [pickle.dumps(self)]
 
     @classmethod
     def deserialize(cls, frames: list) -> "ZMQMessage":
         """
-        Deserialize message using unified MsgpackDecoder.
+        Deserialize message using unified MsgpackDecoder or pickle.
         """
         if not frames:
             raise ValueError("Empty frames received")
 
-        msg_dict = _decoder.decode(frames)
-        return cls(
-            request_type=ZMQRequestType(msg_dict["request_type"]),
-            sender_id=msg_dict["sender_id"],
-            receiver_id=msg_dict["receiver_id"],
-            body=msg_dict["body"],
-            request_id=msg_dict["request_id"],
-            timestamp=msg_dict["timestamp"],
-        )
+        if TQ_ZERO_COPY_SERIALIZATION:
+            msg_dict = _decoder.decode(frames)
+            return cls(
+                request_type=ZMQRequestType(msg_dict["request_type"]),
+                sender_id=msg_dict["sender_id"],
+                receiver_id=msg_dict["receiver_id"],
+                body=msg_dict["body"],
+                request_id=msg_dict["request_id"],
+                timestamp=msg_dict["timestamp"],
+            )
+        else:
+            return pickle.loads(frames[0])
 
 
 def get_free_port() -> str:
