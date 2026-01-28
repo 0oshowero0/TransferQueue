@@ -630,3 +630,193 @@ def test_non_ascii_large_string():
     decoded = decoder.decode(serialized)
 
     assert decoded["unicode_text"] == large_unicode_string
+
+
+# ============================================================================
+# Thread Safety Tests (ContextVar-based isolation)
+# ============================================================================
+class TestSerialThreadSafety:
+    """Test thread safety of MsgpackEncoder/MsgpackDecoder with ContextVar.
+
+    These tests verify that the ContextVar-based fix properly isolates
+    aux_buffers across multiple threads, preventing buffer/metadata mismatch
+    errors that previously occurred when multiple threads used the global
+    _encoder/_decoder instances concurrently.
+
+    Historical issue: Before the fix, aux_buffers was stored as instance
+    variable, causing race conditions where int8 tensor buffers could be
+    associated with long tensor metadata, resulting in:
+    "self.size(-1) must be divisible by 8 to view Byte as Long"
+    """
+
+    @staticmethod
+    def _create_test_message(thread_id: int, iteration: int) -> dict:
+        """Create test message simulating GET_CONSUMPTION response structure.
+
+        Uses different dtypes and varying sizes to maximize the chance of
+        detecting buffer/metadata mismatches under concurrent access.
+        """
+        num_samples = 30 + (iteration % 10)
+        # torch.long: 8 bytes per element
+        global_index = torch.arange(num_samples, dtype=torch.long)
+        # torch.int8: 1 byte per element
+        consumption_status = torch.zeros(num_samples + iteration % 5, dtype=torch.int8)
+
+        return {
+            "request_type": "CONSUMPTION_RESPONSE",
+            "sender_id": f"controller_{thread_id}",
+            "receiver_id": f"client_{thread_id}",
+            "request_id": f"req_{thread_id}_{iteration}",
+            "body": {
+                "partition_id": f"partition_{thread_id}",
+                "global_index": global_index,
+                "consumption_status": consumption_status,
+            },
+        }
+
+    def test_global_encoder_thread_safety(self):
+        """Test that global _encoder/_decoder instances are thread-safe.
+
+        This test verifies the ContextVar-based fix by using the global
+        shared encoder/decoder instances across multiple threads with
+        concurrent serialize/deserialize operations.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from transfer_queue.utils.serial_utils import _decoder, _encoder
+
+        num_threads = 8
+        iterations_per_thread = 50
+        errors: list[str] = []
+        success_count = 0
+
+        def worker(thread_id: int) -> tuple[int, list[str]]:
+            """Worker function that uses global encoder/decoder."""
+            local_success = 0
+            local_errors: list[str] = []
+
+            for i in range(iterations_per_thread):
+                try:
+                    msg = self._create_test_message(thread_id, i)
+
+                    # Use global shared encoder (thread-safe with ContextVar)
+                    serialized = list(_encoder.encode(msg))
+
+                    # Use global shared decoder
+                    deserialized = _decoder.decode(serialized)
+
+                    # Verify data correctness
+                    original_global_index = msg["body"]["global_index"]
+                    decoded_global_index = deserialized["body"]["global_index"]
+
+                    if not torch.equal(original_global_index, decoded_global_index):
+                        raise ValueError(
+                            f"Data mismatch! Original shape: {original_global_index.shape}, "
+                            f"Decoded shape: {decoded_global_index.shape}"
+                        )
+
+                    original_status = msg["body"]["consumption_status"]
+                    decoded_status = deserialized["body"]["consumption_status"]
+                    if not torch.equal(original_status, decoded_status):
+                        raise ValueError(
+                            f"consumption_status mismatch! Original: {original_status.shape}, "
+                            f"Decoded: {decoded_status.shape}"
+                        )
+
+                    local_success += 1
+
+                except Exception as e:
+                    local_errors.append(f"Thread {thread_id}, Iter {i}: {type(e).__name__}: {e}")
+
+            return local_success, local_errors
+
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = {executor.submit(worker, tid): tid for tid in range(num_threads)}
+
+            for future in as_completed(futures):
+                s, e = future.result()
+                success_count += s
+                errors.extend(e)
+
+        # All operations should succeed with the ContextVar fix
+        total_ops = num_threads * iterations_per_thread
+        assert success_count == total_ops, (
+            f"Thread safety test failed: {len(errors)} errors out of {total_ops} operations.\n"
+            f"Sample errors: {errors[:5]}"
+        )
+
+    def test_mixed_dtype_concurrent_serialization(self):
+        """Test concurrent serialization of tensors with different dtypes.
+
+        This test specifically targets the historical bug where buffer index
+        mismatches occurred between int8 and int64 tensors, causing view errors.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from transfer_queue.utils.serial_utils import _decoder, _encoder
+
+        num_threads = 16
+        iterations = 30
+
+        # Use different dtypes with different byte sizes to maximize
+        # the chance of triggering buffer/metadata mismatches
+        dtype_configs = [
+            (torch.int8, (50,)),  # 1 byte per element
+            (torch.long, (50,)),  # 8 bytes per element
+            (torch.float16, (50, 10)),  # 2 bytes per element
+            (torch.float32, (50, 10)),  # 4 bytes per element
+            (torch.bfloat16, (50, 10)),  # 2 bytes per element
+        ]
+
+        def worker(thread_id: int) -> tuple[int, list[str]]:
+            local_success = 0
+            local_errors: list[str] = []
+
+            for i in range(iterations):
+                try:
+                    # Select dtype configuration based on thread_id and iteration
+                    dtype, shape = dtype_configs[(thread_id + i) % len(dtype_configs)]
+
+                    if dtype in (torch.int8, torch.long):
+                        tensor = torch.randint(-128, 127, shape, dtype=dtype)
+                    else:
+                        tensor = torch.randn(*shape, dtype=dtype)
+
+                    msg = {
+                        "thread_id": thread_id,
+                        "iteration": i,
+                        "tensor": tensor,
+                        "nested": {"inner_tensor": torch.randn(10, dtype=torch.float32)},
+                    }
+
+                    serialized = list(_encoder.encode(msg))
+                    deserialized = _decoder.decode(serialized)
+
+                    # Verify tensor correctness
+                    if not torch.equal(deserialized["tensor"], tensor):
+                        raise ValueError(f"Tensor mismatch for {dtype}")
+
+                    if not torch.allclose(deserialized["nested"]["inner_tensor"], msg["nested"]["inner_tensor"]):
+                        raise ValueError("Nested tensor mismatch")
+
+                    local_success += 1
+
+                except Exception as e:
+                    local_errors.append(f"Thread {thread_id}, Iter {i}: {type(e).__name__}: {e}")
+
+            return local_success, local_errors
+
+        errors: list[str] = []
+        success_count = 0
+
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = {executor.submit(worker, tid): tid for tid in range(num_threads)}
+            for future in as_completed(futures):
+                s, e = future.result()
+                success_count += s
+                errors.extend(e)
+
+        total_ops = num_threads * iterations
+        assert success_count == total_ops, (
+            f"Mixed dtype test failed: {len(errors)} errors out of {total_ops}.\nSample errors: {errors[:5]}"
+        )
