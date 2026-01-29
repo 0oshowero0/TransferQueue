@@ -25,12 +25,11 @@ from uuid import uuid4
 import psutil
 import zmq
 
-from transfer_queue.utils.serial_utils import _decoder, _encoder
-from transfer_queue.utils.utils import (
-    ExplicitEnum,
-    TransferQueueRole,
+from transfer_queue.utils.common import (
     get_env_bool,
 )
+from transfer_queue.utils.enum_utils import ExplicitEnum, TransferQueueRole
+from transfer_queue.utils.serial_utils import _decoder, _encoder
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))

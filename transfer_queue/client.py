@@ -37,7 +37,7 @@ from transfer_queue.storage import (
     TransferQueueStorageManager,
     TransferQueueStorageManagerFactory,
 )
-from transfer_queue.utils.utils import limit_pytorch_auto_parallel_threads
+from transfer_queue.utils.common import limit_pytorch_auto_parallel_threads
 from transfer_queue.utils.zmq_utils import (
     ZMQMessage,
     ZMQRequestType,

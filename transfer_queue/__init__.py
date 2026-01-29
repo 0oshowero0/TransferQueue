@@ -16,7 +16,6 @@
 import os
 
 from .client import (
-    AsyncTransferQueueClient,
     TransferQueueClient,
     process_zmq_server_info,
 )
@@ -28,11 +27,10 @@ from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
 from .sampler.rank_aware_sampler import RankAwareSampler
 from .sampler.sequential_sampler import SequentialSampler
 from .storage import SimpleStorageUnit
-from .utils.utils import get_placement_group
+from .utils.common import get_placement_group
 from .utils.zmq_utils import ZMQServerInfo
 
 __all__ = [
-    "AsyncTransferQueueClient",
     "TransferQueueClient",
     "StreamingDataset",
     "StreamingDataLoader",

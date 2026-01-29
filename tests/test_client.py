@@ -34,7 +34,7 @@ from transfer_queue.metadata import (  # noqa: E402
     FieldMeta,
     SampleMeta,
 )
-from transfer_queue.utils.utils import TransferQueueRole  # noqa: E402
+from transfer_queue.utils.enum_utils import TransferQueueRole  # noqa: E402
 from transfer_queue.utils.zmq_utils import (  # noqa: E402
     ZMQMessage,
     ZMQRequestType,

@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from transfer_queue import TransferQueueController  # noqa: E402
-from transfer_queue.utils.utils import ProductionStatus  # noqa: E402
+from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
 
 @pytest.fixture(scope="function")

@@ -29,7 +29,7 @@ sys.path.append(str(parent_dir))
 
 from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
 from transfer_queue.storage import AsyncSimpleStorageManager  # noqa: E402
-from transfer_queue.utils.utils import TransferQueueRole  # noqa: E402
+from transfer_queue.utils.enum_utils import TransferQueueRole  # noqa: E402
 from transfer_queue.utils.zmq_utils import ZMQMessage, ZMQRequestType, ZMQServerInfo  # noqa: E402
 
 

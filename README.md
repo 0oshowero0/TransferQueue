@@ -25,7 +25,7 @@ TransferQueue is a high-performance data storage and transfer module with panora
 TransferQueue offers **fine-grained, sub-sample-level** data management and **load-balancing** (on the way) capabilities, serving as a data gateway that decouples explicit data dependencies across computational tasks. This enables a divide-and-conquer approach, significantly simplifies the algorithm controller design.
 
 <p align="center">
-  <img src="https://github.com/TransferQueue/community_doc/blob/main/docs/main_func.png?raw=true" width="70%">
+  <img src="https://github.com/TransferQueue/community_doc/blob/main/docs/main_func.png?raw=true" width="100%">
 </p>
 
 <h2 id="updates">🔄 Updates</h2>

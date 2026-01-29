@@ -27,7 +27,7 @@ import torch
 from tensordict import TensorDict
 from tensordict.tensorclass import NonTensorData, NonTensorStack
 
-from transfer_queue.utils.utils import ProductionStatus
+from transfer_queue.utils.enum_utils import ProductionStatus
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))

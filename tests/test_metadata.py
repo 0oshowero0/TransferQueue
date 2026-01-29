@@ -28,7 +28,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
 from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
-from transfer_queue.utils.utils import ProductionStatus  # noqa: E402
+from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
 
 class TestFieldMeta:

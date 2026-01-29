@@ -51,7 +51,7 @@ from transfer_queue import (  # noqa: E402
     process_zmq_server_info,
 )
 from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
-from transfer_queue.utils.utils import ProductionStatus  # noqa: E402
+from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
 # Configure Ray
 os.environ["RAY_DEDUP_LOGS"] = "0"

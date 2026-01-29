@@ -37,11 +37,8 @@ from transfer_queue.metadata import (
     SampleMeta,
 )
 from transfer_queue.sampler import BaseSampler, SequentialSampler
+from transfer_queue.utils.enum_utils import ProductionStatus, TransferQueueRole
 from transfer_queue.utils.perf_utils import IntervalPerfMonitor
-from transfer_queue.utils.utils import (
-    ProductionStatus,
-    TransferQueueRole,
-)
 from transfer_queue.utils.zmq_utils import (
     ZMQMessage,
     ZMQRequestType,
