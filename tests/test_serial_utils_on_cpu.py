@@ -820,3 +820,161 @@ class TestSerialThreadSafety:
         assert success_count == total_ops, (
             f"Mixed dtype test failed: {len(errors)} errors out of {total_ops}.\nSample errors: {errors[:5]}"
         )
+
+
+# ============================================================================
+# Numpy Array Type Compatibility Tests
+# ============================================================================
+class TestNumpyArrayTypeCompatibility:
+    """Test numpy array serialization with various dtypes.
+
+    These tests verify the fix for the TypeError when using torch.from_numpy()
+    with unsupported numpy dtypes (e.g., object arrays). The fix uses pickle
+    fallback for incompatible types while maintaining zero-copy for numeric types.
+    """
+
+    def test_numpy_object_array_strings(self):
+        """Test numpy object array with string elements."""
+        import numpy as np
+
+        encoder = MsgpackEncoder()
+        decoder = MsgpackDecoder()
+
+        # String array (dtype=object or unicode)
+        str_arr = np.array(["hello", "world", "test"])
+
+        serialized = encoder.encode(str_arr)
+        deserialized = decoder.decode(serialized)
+
+        assert np.array_equal(deserialized, str_arr)
+        assert deserialized.dtype == str_arr.dtype
+
+    def test_numpy_object_array_mixed_types(self):
+        """Test numpy object array with mixed Python types."""
+        import numpy as np
+
+        encoder = MsgpackEncoder()
+        decoder = MsgpackDecoder()
+
+        # Mixed type array (explicitly object dtype)
+        mixed_arr = np.array([1, "two", 3.0, None], dtype=object)
+
+        serialized = encoder.encode(mixed_arr)
+        deserialized = decoder.decode(serialized)
+
+        assert np.array_equal(deserialized, mixed_arr)
+        assert deserialized.dtype == np.object_
+
+    def test_numpy_object_array_dicts(self):
+        """Test numpy object array containing Python dicts."""
+        import numpy as np
+
+        encoder = MsgpackEncoder()
+        decoder = MsgpackDecoder()
+
+        # Array of dicts
+        dict_arr = np.array([{"a": 1}, {"b": 2}, {"c": 3}], dtype=object)
+
+        serialized = encoder.encode(dict_arr)
+        deserialized = decoder.decode(serialized)
+
+        assert len(deserialized) == len(dict_arr)
+        for orig, decoded in zip(dict_arr, deserialized, strict=False):
+            assert orig == decoded
+
+    def test_numpy_numeric_arrays_zero_copy(self):
+        """Test that numeric numpy arrays use zero-copy path."""
+        import numpy as np
+
+        encoder = MsgpackEncoder()
+        decoder = MsgpackDecoder()
+
+        # These should use zero-copy (torch.from_numpy + tensor encoding)
+        numeric_dtypes = [
+            np.float32,
+            np.float64,
+            np.int32,
+            np.int64,
+            np.int8,
+            np.uint8,
+            np.bool_,
+        ]
+
+        for dtype in numeric_dtypes:
+            if dtype == np.bool_:
+                arr = np.array([True, False, True], dtype=dtype)
+            elif np.issubdtype(dtype, np.integer):
+                arr = np.array([1, 2, 3], dtype=dtype)
+            else:
+                arr = np.array([1.0, 2.0, 3.0], dtype=dtype)
+
+            serialized = encoder.encode(arr)
+
+            # Zero-copy should produce multiple buffers (metadata + tensor buffer)
+            assert len(serialized) > 1, f"Expected zero-copy for dtype {dtype}"
+
+            deserialized = decoder.decode(serialized)
+
+            # Deserialized as torch.Tensor (due to zero-copy path)
+            assert isinstance(deserialized, torch.Tensor)
+            assert torch.allclose(deserialized, torch.from_numpy(arr))
+
+    def test_numpy_object_array_in_zmq_message(self):
+        """Test numpy object array inside ZMQMessage."""
+        import numpy as np
+
+        from transfer_queue.utils.zmq_utils import ZMQMessage, ZMQRequestType
+
+        # Create message with both object array and regular tensors
+        obj_arr = np.array(["prompt_1", "prompt_2", "prompt_3"], dtype=object)
+
+        msg = ZMQMessage(
+            request_type=ZMQRequestType.PUT_DATA,
+            sender_id="test",
+            receiver_id="test",
+            request_id="test",
+            timestamp=0.0,
+            body={
+                "prompts": obj_arr,
+                "tensor_data": torch.randn(3, 10),
+            },
+        )
+
+        encoded_msg = msg.serialize()
+        decoded_msg = ZMQMessage.deserialize(encoded_msg)
+
+        # Verify object array
+        assert np.array_equal(decoded_msg.body["prompts"], obj_arr)
+
+        # Verify tensor (should work with zero-copy)
+        assert torch.allclose(decoded_msg.body["tensor_data"], msg.body["tensor_data"])
+
+    def test_numpy_unicode_string_array(self):
+        """Test numpy unicode string array (dtype='<U...')."""
+        import numpy as np
+
+        encoder = MsgpackEncoder()
+        decoder = MsgpackDecoder()
+
+        # Unicode string array with Chinese characters
+        unicode_arr = np.array(["你好", "世界", "测试"])
+
+        serialized = encoder.encode(unicode_arr)
+        deserialized = decoder.decode(serialized)
+
+        assert np.array_equal(deserialized, unicode_arr)
+
+    def test_numpy_bytes_array(self):
+        """Test numpy bytes array (dtype='S...')."""
+        import numpy as np
+
+        encoder = MsgpackEncoder()
+        decoder = MsgpackDecoder()
+
+        # Bytes array
+        bytes_arr = np.array([b"hello", b"world"], dtype="S10")
+
+        serialized = encoder.encode(bytes_arr)
+        deserialized = decoder.decode(serialized)
+
+        assert np.array_equal(deserialized, bytes_arr)

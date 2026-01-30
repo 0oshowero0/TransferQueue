@@ -97,8 +97,17 @@ class MsgpackEncoder:
             return self._encode_tensordict(obj)
 
         # Handle numpy arrays by converting to tensor
+        # Only numeric dtypes are supported by torch.from_numpy:
+        # f=float, i=signed int, u=unsigned int, b=bool, c=complex
         if isinstance(obj, np.ndarray):
-            return self._encode_tensor(torch.from_numpy(obj))
+            if obj.dtype.kind in ("f", "i", "u", "b", "c"):
+                try:
+                    return self._encode_tensor(torch.from_numpy(obj))
+                except (TypeError, RuntimeError):
+                    # Fallback to pickle for unsupported dtypes (e.g., float16 on some platforms)
+                    pass
+            # For object arrays, strings, or other unsupported types, use pickle
+            return msgpack.Ext(CUSTOM_TYPE_PICKLE, pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
 
         if isinstance(obj, FunctionType):
             # cloudpickle for functions/methods
