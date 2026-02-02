@@ -247,7 +247,6 @@ batch_meta = client.get_meta(
     batch_size=8,
     partition_id="train_0",
     task_name="generate_sequences",
-    sampling_config={"n_samples_per_prompt": 4}  # Put the required sampling parameters here
 )
 ```
 

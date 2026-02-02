@@ -167,9 +167,7 @@ def generate_worker(rank_id: int, config: DictConfig, num_samples: int = 20):
 @ray.remote(num_cpus=0.1)
 def update_worker(
     rank_id: int,
-    data_replica_group: int,
-    data_replica_rank: int,
-    data_replica_world_size: int,
+    dp_rank: int,
     config: DictConfig,
     max_steps: int = 5,
 ):
@@ -182,11 +180,8 @@ def update_worker(
 
     Args:
         rank_id: Global rank identifier for logging and display purposes
-        data_replica_group: ID of the data parallel group this rank belongs to
-            Ranks in the same group receive the same data samples
-        data_replica_rank: Local rank index within the data replica group
-            Range: [0, data_replica_world_size - 1]
-        data_replica_world_size: Total number of ranks in this data replica group
+        dp_rank: Data parallel rank ID that this worker belongs to
+            The same Ranks receive the same data samples
         config: TransferQueue configuration
         max_steps: Maximum number of batches to consume
 
@@ -194,10 +189,10 @@ def update_worker(
         dict: Contains data_replica_rank, data_replica_group, and consumed_ids
 
     Example:
-        For a setup with 2 data replica groups (0 and 1), each with 2 ranks:
-        - Group 0: ranks [0, 1] receive identical samples
-        - Group 1: ranks [2, 3] receive identical samples
-        All ranks within the same group get the same global indexes.
+        For a setup with 2 data rank (0 and 1):
+        - Rank 0: receive identical samples
+        - Rank 1: receive identical samples
+        All ranks within the same rank index get the same global indexes.
 
     Note:
         The StreamingDataLoader yields tuples of (batch, batch_meta) where:
@@ -209,13 +204,12 @@ def update_worker(
     # This dataset integrates with TransferQueue and handles batch retrieval
     dataset = StreamingDataset(
         config=config,
-        micro_batch_size=2,  # Number of samples per batch
-        required_fields=["meta_idx"],  # Fields to retrieve from storage. We can retrieve partial fields!
+        batch_size=2,
+        micro_batch_size=2,  # Number of samples per micro-batch.
+        data_fields=["meta_idx"],  # Fields to retrieve from storage. We can retrieve partial fields!
         partition_id="train",  # Data partition to consume from
         task_name="update_task",  # Unique task identifier
-        data_replica_group=data_replica_group,
-        data_replica_rank=data_replica_rank,
-        data_replica_world_size=data_replica_world_size,
+        dp_rank=dp_rank,
     )
     print(f"[Update Worker@{rank_id}] StreamingDataset created successfully")
 
@@ -240,10 +234,7 @@ def update_worker(
         # Extract sample IDs from the batch
         ids = batch["meta_idx"].view(-1).tolist()
 
-        print(
-            f"[Update Worker@{rank_id}]: data_replica_rank {data_replica_rank} in "
-            f"data_replica_group {data_replica_group} retrieved samples: {ids}"
-        )
+        print(f"[Update Worker@{rank_id}]: dp_rank {dp_rank} retrieved samples: {ids}")
         consumed_ids.extend(ids)
 
         # Simulate processing time (remove in real training)
@@ -257,8 +248,7 @@ def update_worker(
     print(f"[Update Worker@{rank_id}] Completed {step} steps, consumed {len(consumed_ids)} samples")
 
     return {
-        "data_replica_rank": data_replica_rank,
-        "data_replica_group": data_replica_group,
+        "dp_rank": dp_rank,
         "consumed_ids": consumed_ids,
     }
 
@@ -271,7 +261,7 @@ def start_all_generate_actors(config):
     handlers = []
 
     for i in range(num_workers):
-        handlers.append(generate_worker.remote(rank_id=i, config=config))
+        handlers.append(generate_worker.remote(rank_id=i, config=config, num_samples=20))
 
     return handlers
 
@@ -283,23 +273,18 @@ def start_all_update_actors(config):
 
     # Define the distributed training topology
     rank_ids = [0, 1, 2, 3]
-    data_replica_group = [0, 0, 1, 1]  # First two ranks in group 0, last two in group 1
-    data_replica_world_size = 2  # Each group has 2 ranks
+    dp_rank = [0, 0, 1, 1]  # First two ranks in group 0, last two in group 1
 
     print("Training topology configuration:")
     print(f"  - Total ranks: {len(rank_ids)}")
-    print(f"  - Data replica groups: {len(set(data_replica_group))}")
-    print(f"  - World size per group: {data_replica_world_size}")
-    print(f"  - Group assignments: {dict(zip(rank_ids, data_replica_group, strict=False))}")
+    print(f"  - Data parallel rank: {len(set(dp_rank))}")
 
     handlers = []
     for i in range(len(rank_ids)):
         handlers.append(
             update_worker.remote(
                 rank_id=rank_ids[i],
-                data_replica_group=data_replica_group[i],
-                data_replica_rank=rank_ids[i] % data_replica_world_size,
-                data_replica_world_size=data_replica_world_size,
+                dp_rank=dp_rank[i],
                 config=config,
             )
         )

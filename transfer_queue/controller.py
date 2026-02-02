@@ -781,7 +781,7 @@ class TransferQueueController:
                     - If a BaseSampler subclass is provided, it will be instantiated
                     - Defaults to SequentialSampler for simple sequential sampling
                     - Example: sampler=GRPOGroupNSampler() (instance)
-                    - Example: sampler=GRPOGroupNSampler (class)
+                    - Example: sampler=SequentialSampler (class)
             polling_mode: Whether to use polling mode for TransferQueue controller.
                     - If False, the controller will raise an error when no enough data is available.
                     - If True, the controller will return an empty BatchMeta when no enough data is available.
@@ -1015,12 +1015,12 @@ class TransferQueueController:
         Raises:
             TimeoutError: If waiting for sufficient data times out in fetch mode
         """
-        if partition_id not in self.partitions:
-            self.create_partition(partition_id)
 
         if mode == "insert":
-            partition = self._get_partition(partition_id)
+            if partition_id not in self.partitions:
+                self.create_partition(partition_id)
 
+            partition = self._get_partition(partition_id)
             if data_fields:
                 # This is called during put_data call without providing metadata.
                 # try to use pre-allocated global index first
@@ -1083,6 +1083,7 @@ class TransferQueueController:
                 ready_for_consume_indexes,
                 batch_size,
                 **(sampling_config or {}),
+                **kwargs,
             )
 
             # Check if we got valid results from the sampler
@@ -1240,6 +1241,7 @@ class TransferQueueController:
         partition.clear_data(global_indexes_range, clear_consumption)
         self.index_manager.release_partition(partition_id)
         self.partitions.pop(partition_id)
+        self.sampler.clear_cache(partition_id)
 
     def clear_meta(
         self,

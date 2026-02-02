@@ -68,7 +68,6 @@ def initialize_data_system(config):
     # data_system_controller = TransferQueueController.remote(sampler=grpo_sampler)
 
     # Then use sampling_config in get_meta calls:
-    # sampling_config={"n_samples_per_prompt": 4}
     data_system_controller = TransferQueueController.remote()
     logger.info("TransferQueueController has been created.")
 

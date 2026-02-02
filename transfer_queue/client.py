@@ -179,7 +179,6 @@ class AsyncTransferQueueClient:
                 - 'insert': Internal usage - should not be used by users
             task_name: Optional task name associated with the request
             sampling_config: Optional sampling configuration for custom samplers.
-                           For GRPOGroupNSampler, should include "n_samples_per_prompt": int
             socket: ZMQ async socket for message transmission (injected by decorator)
 
         Returns:
@@ -206,7 +205,6 @@ class AsyncTransferQueueClient:
             ...     partition_id="train_0",
             ...     mode="fetch",
             ...     task_name="generate_sequences",
-            ...     sampling_config={"n_samples_per_prompt": 4}
             ... ))
             >>> print(batch_meta.is_ready)  # True if all samples ready
             >>>
@@ -698,7 +696,7 @@ class AsyncTransferQueueClient:
             partition_id=partition_id,
         )
 
-        if consumption_status is None:
+        if consumption_status is None or consumption_status.numel() == 0:
             return False
         return torch.all(consumption_status == 1).item()
 
@@ -883,7 +881,6 @@ class TransferQueueClient(AsyncTransferQueueClient):
             partition_id: Target data partition id
             task_name: Optional task name associated with the request
             sampling_config: Optional sampling configuration for custom samplers.
-                           For GRPOGroupNSampler, should include "n_samples_per_prompt": int
 
         Returns:
             BatchMeta: Batch metadata containing data location information
