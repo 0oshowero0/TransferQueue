@@ -260,7 +260,7 @@ class YuanrongStorageClient(TransferQueueStorageKVClient):
             for i in range(0, len(cpu_keys), CPU_DS_CLIENT_KEYS_LIMIT):
                 batch_keys = cpu_keys[i : i + CPU_DS_CLIENT_KEYS_LIMIT]
                 batch_values = cpu_values[i : i + CPU_DS_CLIENT_KEYS_LIMIT]
-                self._cpu_ds_client.mset(batch_keys, batch_values)
+                self.mset_zcopy(batch_keys, batch_values)
 
         else:
             #  All data goes through CPU path
@@ -356,9 +356,9 @@ class YuanrongStorageClient(TransferQueueStorageKVClient):
             for i in range(0, len(cpu_keys), CPU_DS_CLIENT_KEYS_LIMIT):
                 batch_keys = cpu_keys[i : i + CPU_DS_CLIENT_KEYS_LIMIT]
                 batch_indices = cpu_indices[i : i + CPU_DS_CLIENT_KEYS_LIMIT]
-                raw_values = self._cpu_ds_client.get(batch_keys)
-                for idx, raw_val in zip(batch_indices, raw_values, strict=False):
-                    results[idx] = pickle.loads(raw_val)
+                objects = self.mget_zcopy(batch_keys)
+                for idx, obj in zip(batch_indices, objects, strict=False):
+                    results[idx] = obj
 
             return results
 
