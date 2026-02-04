@@ -48,7 +48,7 @@ TQ_SIMPLE_STORAGE_MANAGER_SEND_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_M
 TQ_ZERO_COPY_SERIALIZATION = get_env_bool("TQ_ZERO_COPY_SERIALIZATION", default=False)
 
 
-@TransferQueueStorageManagerFactory.register("AsyncSimpleStorageManager")
+@TransferQueueStorageManagerFactory.register("SimpleStorage")
 class AsyncSimpleStorageManager(TransferQueueStorageManager):
     """Asynchronous storage manager that handles multiple storage units.
 

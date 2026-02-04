@@ -30,7 +30,7 @@ if not logger.hasHandlers():
     logger.addHandler(handler)
 
 
-@TransferQueueStorageManagerFactory.register("YuanrongStorageManager")
+@TransferQueueStorageManagerFactory.register("Yuanrong")
 class YuanrongStorageManager(KVStorageManager):
     """Storage manager for Yuanrong backend."""
 

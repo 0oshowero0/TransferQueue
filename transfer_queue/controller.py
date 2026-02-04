@@ -28,6 +28,7 @@ from uuid import uuid4
 import ray
 import torch
 import zmq
+from omegaconf import DictConfig
 from ray.util import get_node_ip_address
 from torch import Tensor
 
@@ -879,6 +880,7 @@ class TransferQueueController:
 
         self.controller_id = f"TQ_CONTROLLER_{uuid4().hex[:8]}"
         self.polling_mode = polling_mode
+        self.tq_config = None  # global config for TransferQueue system
 
         # Initialize ZMQ sockets for communication
         self._init_zmq_socket()
@@ -1772,3 +1774,11 @@ class TransferQueueController:
     def get_zmq_server_info(self) -> ZMQServerInfo:
         """Get ZMQ server connection information."""
         return self.zmq_server_info
+
+    def store_config(self, conf: DictConfig) -> None:
+        """Storage the global config of TransferQueue."""
+        self.tq_conf = conf
+
+    def get_config(self) -> DictConfig:
+        """Retrieve the global config of TransferQueue."""
+        return self.tq_conf

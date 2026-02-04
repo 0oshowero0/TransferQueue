@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 
-@TransferQueueStorageManagerFactory.register("MooncakeStorageManager")
+@TransferQueueStorageManagerFactory.register("MooncakeStore")
 class MooncakeStorageManager(KVStorageManager):
     """Storage manager for MooncakeStorage backend."""
 
