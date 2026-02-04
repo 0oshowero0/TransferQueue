@@ -15,10 +15,22 @@
 
 import os
 
-from . import interface
 from .client import TransferQueueClient
 from .controller import TransferQueueController
 from .dataloader import StreamingDataLoader, StreamingDataset
+from .interface import (
+    async_clear_samples,
+    async_get_data,
+    async_get_meta,
+    async_put,
+    async_set_custom_meta,
+    clear_samples,
+    get_data,
+    get_meta,
+    init,
+    put,
+    set_custom_meta,
+)
 from .metadata import BatchMeta
 from .sampler import BaseSampler
 from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
@@ -28,7 +40,19 @@ from .storage import SimpleStorageUnit
 from .utils.common import get_placement_group
 from .utils.zmq_utils import ZMQServerInfo, process_zmq_server_info
 
-__all__ = interface.__all__ + [
+__all__ = [
+    "init",
+    "get_meta",
+    "get_data",
+    "put",
+    "set_custom_meta",
+    "clear_samples",
+    "async_get_meta",
+    "async_get_data",
+    "async_put",
+    "async_set_custom_meta",
+    "async_clear_samples",
+] + [
     "TransferQueueClient",
     "StreamingDataset",
     "StreamingDataLoader",

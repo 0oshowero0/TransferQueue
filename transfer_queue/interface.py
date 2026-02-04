@@ -84,6 +84,36 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
 
 
 def init(conf: Optional[DictConfig] = None) -> None:
+    """Initialize the TransferQueue system.
+
+    This function sets up the TransferQueue controller, distributed storage, and client.
+    It should be called once at the beginning of the program before any data operations.
+
+    If a controller already exists (e.g., initialized by another process), this function
+    will retrieve the config from existing controller and initialize the TransferQueueClient.
+    In this case, the `conf` parameter will be ignored.
+
+    Args:
+        conf: Optional configuration dictionary. If provided, it will be merged with
+              the default config from 'config.yaml'. This is only used for first-time
+              initializing. When connecting to an existing controller, this parameter
+              is ignored.
+
+    Raises:
+        ValueError: If config is not valid or required configuration keys are missing.
+
+    Example:
+        >>> # In process 0, node A
+        >>> import transfer_queue as tq
+        >>> tq.init()   # Initialize the TransferQueue
+        >>> tq.put(...) # then you can use tq for data operations
+        >>>
+        >>> # In process 1, node B (with Ray connected to node A)
+        >>> import transfer_queue as tq
+        >>> tq.init()   # This will only initialize a TransferQueueClient and link with existing TQ
+        >>> metadata = tq.get_meta(...)
+        >>> data = tq.get_data(metadata)
+    """
     try:
         # Already initialize TransferQueue
         controller = ray.get_actor("TransferQueueController")
@@ -500,18 +530,3 @@ async def async_clear_samples(metadata: BatchMeta):
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_clear_samples(metadata)
-
-
-__all__ = [
-    "init",
-    "get_meta",
-    "get_data",
-    "put",
-    "set_custom_meta",
-    "clear_samples",
-    "async_get_meta",
-    "async_get_data",
-    "async_put",
-    "async_set_custom_meta",
-    "async_clear_samples",
-]
