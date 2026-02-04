@@ -53,6 +53,7 @@ def _maybe_create_transferqueue_client(
 
         backend_name = conf.backend.storage_backend
         conf.backend[backend_name].controller_info = conf.controller.zmq_info
+
         _TRANSFER_QUEUE_CLIENT.initialize_storage_manager(manager_type=backend_name, config=conf.backend[backend_name])
 
     return _TRANSFER_QUEUE_CLIENT
@@ -77,11 +78,12 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
                     lifetime="detached",
                 ).remote(storage_unit_size=math.ceil(total_storage_size / num_data_storage_units))
                 _TRANSFER_QUEUE_STORAGE[f"TransferQueueStorageUnit#{storage_unit_rank}"] = storage_node
-                print(f"TransferQueueStorageUnit#{storage_unit_rank} has been created.")
+                logger.info(f"TransferQueueStorageUnit#{storage_unit_rank} has been created.")
 
             # extract zmq info
             storage_zmq_info = process_zmq_server_info(_TRANSFER_QUEUE_STORAGE)
-            conf.backend.zmq_info = storage_zmq_info
+            backend_name = conf.backend.storage_backend
+            conf.backend[backend_name].zmq_info = storage_zmq_info
 
     return conf
 
@@ -120,46 +122,54 @@ def init(conf: Optional[DictConfig] = None) -> None:
     try:
         # Already initialize TransferQueue
         controller = ray.get_actor("TransferQueueController")
-        conf = ray.get(controller.get_config())
+        logger.info("Found existing TransferQueueController instance. Connecting...")
+
         while conf is None:
-            print("Waiting for controller to initialize... Retrying")
+            remote_conf = ray.get(controller.get_config())
+            if remote_conf is not None:
+                _maybe_create_transferqueue_client(remote_conf)
+                logger.info("TransferQueueClient initialized.")
+                return
+
+            logger.debug("Waiting for controller to initialize... Retrying in 1s")
             time.sleep(1)
-            conf = ray.get(ray.get_actor("TransferQueueController").get_config())
-        _maybe_create_transferqueue_client(conf)
-
     except ValueError:
-        # First-time initialize TransferQueue
-        # TODO: 是否会有竞态？文件锁好像都没法解决，需要调查Ray是否有相关机制
-        # create config
-        final_conf = OmegaConf.create({}, flags={"allow_objects": True})
-        with pkg_resources.path("transfer_queue", "config.yaml") as p:
-            default_conf = OmegaConf.load(p)
-        final_conf = OmegaConf.merge(final_conf, default_conf)
-        if conf:
-            final_conf = OmegaConf.merge(final_conf, conf)
+        logger.info("No TransferQueueController found. Starting first-time initialization...")
 
-        # create controller
-        try:
-            # TODO: support sampler instance
-            sampler = globals()[final_conf.controller.sampler]
-        except KeyError:
-            raise ValueError(f"Could not find sampler {final_conf.controller.sampler}") from None
+    # First-time initialize TransferQueue
+    # TODO: fix possible race condition, especially for cross-node scenario
 
-        controller = TransferQueueController.options(name="TransferQueueController", lifetime="detached").remote(  # type: ignore[attr-defined]
-            sampler=sampler, polling_mode=final_conf.controller.polling_mode
-        )
+    # create config
+    final_conf = OmegaConf.create({}, flags={"allow_objects": True})
+    with pkg_resources.path("transfer_queue", "config.yaml") as p:
+        default_conf = OmegaConf.load(p)
+    final_conf = OmegaConf.merge(final_conf, default_conf)
+    if conf:
+        final_conf = OmegaConf.merge(final_conf, conf)
 
-        controller_zmq_info = process_zmq_server_info(controller)
-        final_conf.controller.zmq_info = controller_zmq_info
+    # create controller
+    try:
+        # TODO: support sampler instance
+        sampler = globals()[final_conf.controller.sampler]
+    except KeyError:
+        raise ValueError(f"Could not find sampler {final_conf.controller.sampler}") from None
 
-        # create distributed storage backends
-        final_conf = _maybe_create_transferqueue_storage(final_conf)
+    controller = TransferQueueController.options(name="TransferQueueController", lifetime="detached").remote(  # type: ignore[attr-defined]
+        sampler=sampler, polling_mode=final_conf.controller.polling_mode
+    )
+    logger.info("TransferQueueController has been created.")
 
-        # storage the config into controller
-        ray.get(controller.store_config.remote(final_conf))
+    controller_zmq_info = process_zmq_server_info(controller)
+    final_conf.controller.zmq_info = controller_zmq_info
 
-        # create client
-        _maybe_create_transferqueue_client(final_conf)
+    # create distributed storage backends
+    final_conf = _maybe_create_transferqueue_storage(final_conf)
+
+    # storage the config into controller
+    ray.get(controller.store_config.remote(final_conf))
+
+    # create client
+    _maybe_create_transferqueue_client(final_conf)
 
 
 def get_meta(

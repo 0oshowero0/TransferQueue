@@ -62,10 +62,10 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         super().__init__(config)
 
         self.config = config
-        server_infos: ZMQServerInfo | dict[str, ZMQServerInfo] | None = config.zmq_info
+        server_infos: ZMQServerInfo | dict[str, ZMQServerInfo] | None = config.get("zmq_info", None)
 
         if server_infos is None:
-            server_infos = config.storage_unit_infos
+            server_infos = config.get("storage_unit_infos", None)
             if server_infos is not None:
                 warnings.warn(
                     "The config entry `storage_unit_infos` is deprecated, use `zmq_info` instead.",

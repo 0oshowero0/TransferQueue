@@ -19,11 +19,13 @@ from .client import TransferQueueClient
 from .controller import TransferQueueController
 from .dataloader import StreamingDataLoader, StreamingDataset
 from .interface import (
+    async_clear_partition,
     async_clear_samples,
     async_get_data,
     async_get_meta,
     async_put,
     async_set_custom_meta,
+    clear_partition,
     clear_samples,
     get_data,
     get_meta,
@@ -47,11 +49,14 @@ __all__ = [
     "put",
     "set_custom_meta",
     "clear_samples",
+    "clear_partition",
+    "async_clear_samples",
     "async_get_meta",
     "async_get_data",
     "async_put",
     "async_set_custom_meta",
     "async_clear_samples",
+    "async_clear_partition",
 ] + [
     "TransferQueueClient",
     "StreamingDataset",

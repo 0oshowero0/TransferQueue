@@ -50,7 +50,7 @@ os.environ["RAY_DEDUP_LOGS"] = "0"
 os.environ["RAY_DEBUG"] = "1"
 
 if not ray.is_initialized():
-    ray.init()
+    ray.init(namespace="TransferQueueTutorial")
 
 
 def demonstrate_data_workflow():

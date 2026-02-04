@@ -6,7 +6,7 @@ controller:
   sampler: SequentialSampler
   polling_mode: False
   # ZMQ Server IP & Ports (automatically generated during init)
-  zmq_info: None
+  zmq_info: null
 
 backend:
   # Pluggable storage/transport backend of TransferQueue. Choose from:
@@ -20,7 +20,7 @@ backend:
     # Number of distributed storage units for SimpleStorage backend
     num_data_storage_units: 2
     # ZMQ Server IP & Ports (automatically generated during init)
-    zmq_info: None
+    zmq_info: null
 
   # For Yuanrong:
   # TODO
