@@ -124,7 +124,7 @@ def init(conf: Optional[DictConfig] = None) -> None:
         while conf is None:
             print("Waiting for controller to initialize... Retrying")
             time.sleep(1)
-            conf = ray.get_actor("TransferQueueController").get_config()
+            conf = ray.get(ray.get_actor("TransferQueueController").get_config())
         _maybe_create_transferqueue_client(conf)
 
     except ValueError:
@@ -140,6 +140,7 @@ def init(conf: Optional[DictConfig] = None) -> None:
 
         # create controller
         try:
+            # TODO: support sampler instance
             sampler = globals()[final_conf.controller.sampler]
         except KeyError:
             raise ValueError(f"Could not find sampler {final_conf.controller.sampler}") from None
