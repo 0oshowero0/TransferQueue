@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import math
 import os
 from typing import Any, Optional
@@ -29,22 +30,11 @@ from transfer_queue.storage.simple_backend import SimpleStorageUnit
 from transfer_queue.utils.common import get_placement_group
 from transfer_queue.utils.zmq_utils import process_zmq_server_info
 
-_TRANSFER_QUEUE_CLIENT = None
-_TRANSFER_QUEUE_STORAGE = None
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
-__all__ = [
-    "init",
-    "get_meta",
-    "get_data",
-    "put",
-    "set_custom_meta",
-    "clear_samples",
-    "async_get_meta",
-    "async_get_data",
-    "async_put",
-    "async_set_custom_meta",
-    "async_clear_samples",
-]
+_TRANSFER_QUEUE_CLIENT: Any = None
+_TRANSFER_QUEUE_STORAGE: Any = None
 
 
 def _maybe_create_transferqueue_client(
@@ -77,7 +67,7 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
             storage_placement_group = get_placement_group(conf.backend.num_data_storage_units, num_cpus_per_actor=1)
 
             for storage_unit_rank in range(num_data_storage_units):
-                storage_node = SimpleStorageUnit.options(
+                storage_node = SimpleStorageUnit.options(  # type: ignore[attr-defined]
                     placement_group=storage_placement_group,
                     placement_group_bundle_index=storage_unit_rank,
                     name=f"TQStorageUnit#{storage_unit_rank}",
@@ -113,9 +103,9 @@ def init(conf: Optional[DictConfig] = None) -> None:
         try:
             sampler = globals()[final_conf.controller.sampler]
         except KeyError:
-            raise ValueError(f"Could not find sampler {final_conf.controller.sampler}")
+            raise ValueError(f"Could not find sampler {final_conf.controller.sampler}") from None
 
-        controller = TransferQueueController.options(name="TransferQueueController", lifetime="detached").remote(
+        controller = TransferQueueController.options(name="TransferQueueController", lifetime="detached").remote(  # type: ignore[attr-defined]
             sampler=sampler, polling_mode=final_conf.controller.polling_mode
         )
 
@@ -191,7 +181,7 @@ def get_meta(
     """
 
     tq_client = _maybe_create_transferqueue_client()
-    tq_client.get_meta(data_fields, batch_size, partition_id, task_name, sampling_config)
+    return tq_client.get_meta(data_fields, batch_size, partition_id, task_name, sampling_config)
 
 
 async def async_get_meta(
@@ -308,6 +298,66 @@ async def async_get_data(metadata: BatchMeta) -> TensorDict:
     return await tq_client.async_get_data(metadata)
 
 
+def put(data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None) -> BatchMeta:
+    """Synchronously write data to storage units based on metadata.
+
+    If metadata is not provided, it will be created automatically using insert mode
+    with the provided data fields and partition_id.
+
+    During put, the custom_meta in metadata will update the corresponding custom_meta in
+    TransferQueue Controller.
+
+    Note:
+        When using multiple workers for distributed execution, there may be data
+        ordering inconsistencies between workers during put operations.
+
+    Args:
+        data: Data to write as TensorDict
+        metadata: Records the metadata of a batch of data samples, containing index and
+                  storage unit information. If None, metadata will be auto-generated.
+        partition_id: Target data partition id (required if metadata is not provided)
+
+    Returns:
+        BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
+                   metadata; will be updated in a future version to reflect the post-put state)
+
+    Raises:
+        ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
+        RuntimeError: If storage operation fails
+
+    Example:
+        >>> batch_size = 4
+        >>> seq_len = 16
+        >>> current_partition_id = "train_0"
+        >>> # Example 1: Normal usage with existing metadata
+        >>> batch_meta = client.get_meta(
+        ...     data_fields=["prompts", "attention_mask"],
+        ...     batch_size=batch_size,
+        ...     partition_id=current_partition_id,
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ... )
+        >>> batch = client.get_data(batch_meta)
+        >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
+        >>> client.put(data=output, metadata=batch_meta)
+        >>>
+        >>> # Example 2: Initial data insertion without pre-existing metadata
+        >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
+        >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
+        >>> # without metadata.
+        >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
+        >>> # interleave the initial data if n_sample > 1 before calling the async_put().
+        >>> original_prompts = torch.randn(batch_size, seq_len)
+        >>> n_samples = 4
+        >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
+        >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
+        >>> # This will create metadata in "insert" mode internally.
+        >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.put(data, metadata, partition_id)
+
+
 async def async_put(
     data: TensorDict,
     metadata: Optional[BatchMeta] = None,
@@ -370,66 +420,6 @@ async def async_put(
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_put(data, metadata, partition_id)
-
-
-def put(data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None) -> BatchMeta:
-    """Synchronously write data to storage units based on metadata.
-
-    If metadata is not provided, it will be created automatically using insert mode
-    with the provided data fields and partition_id.
-
-    During put, the custom_meta in metadata will update the corresponding custom_meta in
-    TransferQueue Controller.
-
-    Note:
-        When using multiple workers for distributed execution, there may be data
-        ordering inconsistencies between workers during put operations.
-
-    Args:
-        data: Data to write as TensorDict
-        metadata: Records the metadata of a batch of data samples, containing index and
-                  storage unit information. If None, metadata will be auto-generated.
-        partition_id: Target data partition id (required if metadata is not provided)
-
-    Returns:
-        BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
-                   metadata; will be updated in a future version to reflect the post-put state)
-
-    Raises:
-        ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
-        RuntimeError: If storage operation fails
-
-    Example:
-        >>> batch_size = 4
-        >>> seq_len = 16
-        >>> current_partition_id = "train_0"
-        >>> # Example 1: Normal usage with existing metadata
-        >>> batch_meta = client.get_meta(
-        ...     data_fields=["prompts", "attention_mask"],
-        ...     batch_size=batch_size,
-        ...     partition_id=current_partition_id,
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ... )
-        >>> batch = client.get_data(batch_meta)
-        >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
-        >>> client.put(data=output, metadata=batch_meta)
-        >>>
-        >>> # Example 2: Initial data insertion without pre-existing metadata
-        >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
-        >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
-        >>> # without metadata.
-        >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
-        >>> # interleave the initial data if n_sample > 1 before calling the async_put().
-        >>> original_prompts = torch.randn(batch_size, seq_len)
-        >>> n_samples = 4
-        >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
-        >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
-        >>> # This will create metadata in "insert" mode internally.
-        >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.put(data, metadata, partition_id)
 
 
 def set_custom_meta(metadata: BatchMeta) -> None:
@@ -510,3 +500,18 @@ async def async_clear_samples(metadata: BatchMeta):
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_clear_samples(metadata)
+
+
+__all__ = [
+    "init",
+    "get_meta",
+    "get_data",
+    "put",
+    "set_custom_meta",
+    "clear_samples",
+    "async_get_meta",
+    "async_get_data",
+    "async_put",
+    "async_set_custom_meta",
+    "async_clear_samples",
+]

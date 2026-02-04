@@ -19,10 +19,11 @@ import pickle
 import socket
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, TypeAlias, Union
+from typing import Any, Optional, TypeAlias
 from uuid import uuid4
 
 import psutil
+import ray
 import zmq
 
 from transfer_queue.utils.common import (
@@ -242,8 +243,7 @@ def create_zmq_socket(
 
 
 def process_zmq_server_info(
-    handlers: dict[Any, Union["TransferQueueController", "TransferQueueStorageManager", "SimpleStorageUnit"]]
-    | Union["TransferQueueController", "TransferQueueStorageManager", "SimpleStorageUnit"],
+    handlers: dict[Any, Any] | Any,
 ):  # noqa: UP007
     """Extract ZMQ server information from handler objects.
 

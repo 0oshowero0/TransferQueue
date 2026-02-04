@@ -15,10 +15,10 @@
 
 import os
 
+from . import interface
 from .client import TransferQueueClient
 from .controller import TransferQueueController
 from .dataloader import StreamingDataLoader, StreamingDataset
-from .interface import *
 from .metadata import BatchMeta
 from .sampler import BaseSampler
 from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
@@ -28,24 +28,21 @@ from .storage import SimpleStorageUnit
 from .utils.common import get_placement_group
 from .utils.zmq_utils import ZMQServerInfo, process_zmq_server_info
 
-__all__ = interface.__all__
-__all__.extend(
-    [
-        "TransferQueueClient",
-        "StreamingDataset",
-        "StreamingDataLoader",
-        "BatchMeta",
-        "TransferQueueController",
-        "SimpleStorageUnit",
-        "ZMQServerInfo",
-        "process_zmq_server_info",
-        "get_placement_group",
-        "BaseSampler",
-        "GRPOGroupNSampler",
-        "SequentialSampler",
-        "RankAwareSampler",
-    ]
-)
+__all__ = interface.__all__ + [
+    "TransferQueueClient",
+    "StreamingDataset",
+    "StreamingDataLoader",
+    "BatchMeta",
+    "TransferQueueController",
+    "SimpleStorageUnit",
+    "ZMQServerInfo",
+    "process_zmq_server_info",
+    "get_placement_group",
+    "BaseSampler",
+    "GRPOGroupNSampler",
+    "SequentialSampler",
+    "RankAwareSampler",
+]
 
 version_folder = os.path.dirname(os.path.join(os.path.abspath(__file__)))
 
