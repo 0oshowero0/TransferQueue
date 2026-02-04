@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from typing import Any
 
 from transfer_queue.storage.managers.base import TransferQueueStorageManager
@@ -42,7 +43,29 @@ class TransferQueueStorageManagerFactory:
     def create(cls, manager_type: str, config: dict[str, Any]) -> TransferQueueStorageManager:
         """Create and return a TransferQueueStorageManager instance."""
         if manager_type not in cls._registry:
-            raise ValueError(
-                f"Unknown manager_type: {manager_type}. Supported managers include: {list(cls._registry.keys())}"
-            )
+            if manager_type == "AsyncSimpleStorageManager":
+                warnings.warn(
+                    f"The manager_type {manager_type} is deprecated, use SimpleStorage instead.",
+                    category=DeprecationWarning,
+                    stacklevel=2,
+                )
+                manager_type = "SimpleStorage"
+            elif manager_type == "MooncakeStorageManager":
+                warnings.warn(
+                    f"The manager_type {manager_type} is deprecated, use MooncakeStore instead.",
+                    category=DeprecationWarning,
+                    stacklevel=2,
+                )
+                manager_type = "MooncakeStore"
+            elif manager_type == "YuanrongStorageManager":
+                warnings.warn(
+                    f"The manager_type {manager_type} is deprecated, use Yuanrong instead.",
+                    category=DeprecationWarning,
+                    stacklevel=2,
+                )
+                manager_type = "Yuanrong"
+            else:
+                raise ValueError(
+                    f"Unknown manager_type: {manager_type}. Supported managers include: {list(cls._registry.keys())}"
+                )
         return cls._registry[manager_type](config)
