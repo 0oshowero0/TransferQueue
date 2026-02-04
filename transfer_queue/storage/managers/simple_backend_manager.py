@@ -16,6 +16,7 @@
 import asyncio
 import logging
 import os
+import warnings
 from collections.abc import Mapping
 from functools import wraps
 from operator import itemgetter
@@ -24,6 +25,7 @@ from uuid import uuid4
 
 import torch
 import zmq
+from omegaconf import DictConfig
 from tensordict import NonTensorStack, TensorDict
 
 from transfer_queue.metadata import BatchMeta
@@ -56,14 +58,23 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
     instances using ZMQ communication and dynamic socket management.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: DictConfig[str, Any]):
         super().__init__(config)
 
         self.config = config
-        server_infos: ZMQServerInfo | dict[str, ZMQServerInfo] | None = config.get("storage_unit_infos", None)
+        server_infos: ZMQServerInfo | dict[str, ZMQServerInfo] | None = config.zmq_info
 
         if server_infos is None:
-            raise ValueError("AsyncSimpleStorageManager requires non-empty 'storage_unit_infos' in config.")
+            server_infos = config.storage_unit_infos
+            if server_infos is not None:
+                warnings.warn(
+                    "The config entry `storage_unit_infos` is deprecated, use `zmq_info` instead.",
+                    category=DeprecationWarning,
+                    stacklevel=2,
+                )
+
+        if server_infos is None:
+            raise ValueError("AsyncSimpleStorageManager requires non-empty 'zmq_info' in config.")
 
         self.storage_unit_infos = self._register_servers(server_infos)
         self._build_storage_mapping_functions()

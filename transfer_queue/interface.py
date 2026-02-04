@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.resources as pkg_resources
 import logging
 import math
 import os
+import time
 from typing import Any, Optional
 
 import ray
@@ -43,13 +45,14 @@ def _maybe_create_transferqueue_client(
     global _TRANSFER_QUEUE_CLIENT
     if _TRANSFER_QUEUE_CLIENT is None:
         if conf is None:
-            raise ValueError("Missing config for initialing TranferQueueClient!")
+            raise ValueError("Missing config for initialing TransferQueueClient!")
         pid = os.getpid()
         _TRANSFER_QUEUE_CLIENT = TransferQueueClient(
-            client_id=f"TQClient_{pid}", controller_info=conf.controller.zmq_info
+            client_id=f"TransferQueueClient_{pid}", controller_info=conf.controller.zmq_info
         )
 
         backend_name = conf.backend.storage_backend
+        conf.backend[backend_name].controller_info = conf.controller.zmq_info
         _TRANSFER_QUEUE_CLIENT.initialize_storage_manager(manager_type=backend_name, config=conf.backend[backend_name])
 
     return _TRANSFER_QUEUE_CLIENT
@@ -59,25 +62,25 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
     global _TRANSFER_QUEUE_STORAGE
 
     if _TRANSFER_QUEUE_STORAGE is None:
-        _TRANSFER_QUEUE_STORAGE = []
+        _TRANSFER_QUEUE_STORAGE = {}
         if conf.backend.storage_backend == "SimpleStorage":
             # initialize SimpleStorageUnit
-            num_data_storage_units = conf.backend.num_data_storage_units
-            total_storage_size = conf.backend.total_storage_size
-            storage_placement_group = get_placement_group(conf.backend.num_data_storage_units, num_cpus_per_actor=1)
+            num_data_storage_units = conf.backend.SimpleStorage.num_data_storage_units
+            total_storage_size = conf.backend.SimpleStorage.total_storage_size
+            storage_placement_group = get_placement_group(num_data_storage_units, num_cpus_per_actor=1)
 
             for storage_unit_rank in range(num_data_storage_units):
                 storage_node = SimpleStorageUnit.options(  # type: ignore[attr-defined]
                     placement_group=storage_placement_group,
                     placement_group_bundle_index=storage_unit_rank,
-                    name=f"TQStorageUnit#{storage_unit_rank}",
+                    name=f"TransferQueueStorageUnit#{storage_unit_rank}",
                     lifetime="detached",
                 ).remote(storage_unit_size=math.ceil(total_storage_size / num_data_storage_units))
-                _TRANSFER_QUEUE_STORAGE.append(storage_node)
-                print(f"TQStorageUnit#{storage_unit_rank} has been created.")
+                _TRANSFER_QUEUE_STORAGE[f"TransferQueueStorageUnit#{storage_unit_rank}"] = storage_node
+                print(f"TransferQueueStorageUnit#{storage_unit_rank} has been created.")
 
             # extract zmq info
-            storage_zmq_info = process_zmq_server_info(_TRANSFER_QUEUE_CLIENT)
+            storage_zmq_info = process_zmq_server_info(_TRANSFER_QUEUE_STORAGE)
             conf.backend.zmq_info = storage_zmq_info
 
     return conf
@@ -118,16 +121,22 @@ def init(conf: Optional[DictConfig] = None) -> None:
         # Already initialize TransferQueue
         controller = ray.get_actor("TransferQueueController")
         conf = ray.get(controller.get_config())
+        while conf is None:
+            print("Waiting for controller to initialize... Retrying")
+            time.sleep(1)
+            conf = ray.get_actor("TransferQueueController").get_config()
         _maybe_create_transferqueue_client(conf)
 
     except ValueError:
         # First-time initialize TransferQueue
-
+        # TODO: 是否会有竞态？文件锁好像都没法解决，需要调查Ray是否有相关机制
         # create config
         final_conf = OmegaConf.create({}, flags={"allow_objects": True})
-        default_conf = OmegaConf.load("config.yaml")
+        with pkg_resources.path("transfer_queue", "config.yaml") as p:
+            default_conf = OmegaConf.load(p)
         final_conf = OmegaConf.merge(final_conf, default_conf)
-        final_conf = OmegaConf.merge(final_conf, conf)
+        if conf:
+            final_conf = OmegaConf.merge(final_conf, conf)
 
         # create controller
         try:
@@ -146,7 +155,7 @@ def init(conf: Optional[DictConfig] = None) -> None:
         final_conf = _maybe_create_transferqueue_storage(final_conf)
 
         # storage the config into controller
-        controller.store_config(final_conf)
+        ray.get(controller.store_config.remote(final_conf))
 
         # create client
         _maybe_create_transferqueue_client(final_conf)
@@ -530,3 +539,29 @@ async def async_clear_samples(metadata: BatchMeta):
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_clear_samples(metadata)
+
+
+def clear_partition(partition_id: str):
+    """Synchronously clear the whole partition from all storage units and the controller.
+
+    Args:
+        partition_id: The partition id to clear data for
+
+    Raises:
+        RuntimeError: If clear operation fails
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.clear_partition(partition_id)
+
+
+async def async_clear_partition(partition_id: str):
+    """Asynchronously clear the whole partition from all storage units and the controller.
+
+    Args:
+        partition_id: The partition id to clear data for
+
+    Raises:
+        RuntimeError: If clear operation fails
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_clear_partition(partition_id)

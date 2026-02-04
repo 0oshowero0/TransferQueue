@@ -28,6 +28,7 @@ from uuid import uuid4
 import ray
 import torch
 import zmq
+from omegaconf import DictConfig
 from tensordict import NonTensorStack, TensorDict
 from torch import Tensor
 
@@ -59,7 +60,7 @@ class TransferQueueStorageManager(ABC):
     """Base class for storage layer. It defines the interface for data operations and
     generally provides handshake & notification capabilities."""
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: DictConfig[str, Any]):
         self.storage_manager_id = f"TQ_STORAGE_{uuid4().hex[:8]}"
         self.config = config
         controller_info = config.get("controller_info")
