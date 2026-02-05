@@ -51,7 +51,6 @@ __all__ = [
     "set_custom_meta",
     "clear_samples",
     "clear_partition",
-    "async_clear_samples",
     "async_get_meta",
     "async_get_data",
     "async_put",

@@ -1776,12 +1776,12 @@ class TransferQueueController:
         return self.zmq_server_info
 
     def store_config(self, conf: DictConfig) -> None:
-        """Storage the global config of TransferQueue."""
-        self.tq_conf = conf
+        """Store the global config of TransferQueue."""
+        self.tq_config = conf
 
     def get_config(self) -> DictConfig:
         """Retrieve the global config of TransferQueue."""
-        return self.tq_conf
+        return self.tq_config
 
     def register_sampler(
         self,

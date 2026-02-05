@@ -46,7 +46,7 @@ def _maybe_create_transferqueue_client(
     global _TRANSFER_QUEUE_CLIENT
     if _TRANSFER_QUEUE_CLIENT is None:
         if conf is None:
-            raise ValueError("Missing config for initialing TransferQueueClient!")
+            raise ValueError("Missing config for initializing TransferQueueClient!")
         pid = os.getpid()
         _TRANSFER_QUEUE_CLIENT = TransferQueueClient(
             client_id=f"TransferQueueClient_{pid}", controller_info=conf.controller.zmq_info
@@ -185,7 +185,7 @@ def init(conf: Optional[DictConfig] = None) -> None:
     # create distributed storage backends
     final_conf = _maybe_create_transferqueue_storage(final_conf)
 
-    # storage the config into controller
+    # store the config into controller
     ray.get(controller.store_config.remote(final_conf))
     logger.info(f"TransferQueue config: {final_conf}")
 
