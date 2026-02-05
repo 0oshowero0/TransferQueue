@@ -155,7 +155,8 @@ def init(conf: Optional[DictConfig] = None) -> None:
 
     # create controller
     try:
-        sampler = final_conf.conroller.sampler
+        print(final_conf)
+        sampler = final_conf.controller.sampler
         if isinstance(sampler, BaseSampler):
             # user pass a pre-initialized sampler instance
             sampler = sampler
