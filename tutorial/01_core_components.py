@@ -125,16 +125,16 @@ def demonstrate_storage_backend_options():
     print("=" * 80)
 
     print("TransferQueue supports multiple storage backends:")
-    print("1. SimpleStorageUnit (default)")
+    print("1. SimpleStorage (default)")
     print("   - In-memory storage, fast and simple")
     print("   - Leveraging ZMQ for communication, with zero-copy serialization and transfer")
     print("   - No extra dependencies, good for development and testing")
 
-    print("2. YuanrongStorage")
+    print("2. Yuanrong")
     print("   - Ascend native distributed storage solution")
     print("   - Hierarchical storage interfaces including HBM/DRAM/SSD")
 
-    print("3. MoonCakeStore (on the way)")
+    print("3. MooncakeStore (on the way)")
     print("   - Support multiple transmission protocols")
     print("   - RDMA between DRAM and HBM")
 
@@ -189,8 +189,8 @@ def main():
         print("3. You can swap out different storage backends easily")
 
         # Cleanup
-        ray.shutdown()
         tq.close()
+        ray.shutdown()
         print("\n✓ Cleanup complete")
 
     except Exception as e:
