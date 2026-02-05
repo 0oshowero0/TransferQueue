@@ -1782,3 +1782,27 @@ class TransferQueueController:
     def get_config(self) -> DictConfig:
         """Retrieve the global config of TransferQueue."""
         return self.tq_conf
+
+    def register_sampler(
+        self,
+        sampler: BaseSampler | type[BaseSampler] = SequentialSampler,
+    ) -> None:
+        """
+        Register a sampler instance or subclass after the controller is initialized.
+
+        Args:
+            sampler: Sampler instance or sampler class to use for data sampling.
+                    - If a BaseSampler instance is provided, it will be used directly
+                    - If a BaseSampler subclass is provided, it will be instantiated
+                    - Defaults to SequentialSampler for simple sequential sampling
+                    - Example: sampler=GRPOGroupNSampler() (instance)
+                    - Example: sampler=SequentialSampler (class)
+        """
+        if isinstance(sampler, BaseSampler):
+            self.sampler = sampler
+        elif isinstance(sampler, type) and issubclass(sampler, BaseSampler):
+            self.sampler = sampler()
+        else:
+            raise TypeError(
+                f"sampler {getattr(sampler, '__name__', repr(sampler))} must be an instance or subclass of BaseSampler"
+            )

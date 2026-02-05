@@ -28,6 +28,7 @@ from transfer_queue.client import TransferQueueClient
 from transfer_queue.controller import TransferQueueController
 from transfer_queue.metadata import BatchMeta
 from transfer_queue.sampler import *  # noqa: F401
+from transfer_queue.sampler import BaseSampler
 from transfer_queue.storage.simple_backend import SimpleStorageUnit
 from transfer_queue.utils.common import get_placement_group
 from transfer_queue.utils.zmq_utils import process_zmq_server_info
@@ -88,6 +89,24 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
     return conf
 
 
+def _init_from_existing() -> None:
+    """Initialize the TransferQueueClient from existing controller."""
+
+    controller = ray.get_actor("TransferQueueController")
+    logger.info("Found existing TransferQueueController instance. Connecting...")
+
+    conf = None
+    while conf is None:
+        remote_conf = ray.get(controller.get_config())
+        if remote_conf is not None:
+            _maybe_create_transferqueue_client(remote_conf)
+            logger.info("TransferQueueClient initialized.")
+            return
+
+        logger.debug("Waiting for controller to initialize... Retrying in 1s")
+        time.sleep(1)
+
+
 def init(conf: Optional[DictConfig] = None) -> None:
     """Initialize the TransferQueue system.
 
@@ -120,24 +139,11 @@ def init(conf: Optional[DictConfig] = None) -> None:
         >>> data = tq.get_data(metadata)
     """
     try:
-        # Already initialize TransferQueue
-        controller = ray.get_actor("TransferQueueController")
-        logger.info("Found existing TransferQueueController instance. Connecting...")
-
-        while conf is None:
-            remote_conf = ray.get(controller.get_config())
-            if remote_conf is not None:
-                _maybe_create_transferqueue_client(remote_conf)
-                logger.info("TransferQueueClient initialized.")
-                return
-
-            logger.debug("Waiting for controller to initialize... Retrying in 1s")
-            time.sleep(1)
+        _init_from_existing()
     except ValueError:
         logger.info("No TransferQueueController found. Starting first-time initialization...")
 
     # First-time initialize TransferQueue
-    # TODO: fix possible race condition, especially for cross-node scenario
 
     # create config
     final_conf = OmegaConf.create({}, flags={"allow_objects": True})
@@ -149,15 +155,30 @@ def init(conf: Optional[DictConfig] = None) -> None:
 
     # create controller
     try:
-        # TODO: support sampler instance
-        sampler = globals()[final_conf.controller.sampler]
+        sampler = final_conf.conroller.sampler
+        if isinstance(sampler, BaseSampler):
+            # user pass a pre-initialized sampler instance
+            sampler = sampler
+        elif isinstance(sampler, type) and issubclass(sampler, BaseSampler):
+            # user pass a sampler class
+            sampler = sampler()
+        elif isinstance(sampler, str):
+            # user pass a sampler name str
+            # try to convert as sampler class
+            sampler = globals()[final_conf.controller.sampler]
     except KeyError:
         raise ValueError(f"Could not find sampler {final_conf.controller.sampler}") from None
 
-    controller = TransferQueueController.options(name="TransferQueueController", lifetime="detached").remote(  # type: ignore[attr-defined]
-        sampler=sampler, polling_mode=final_conf.controller.polling_mode
-    )
-    logger.info("TransferQueueController has been created.")
+    try:
+        # Ray will make sure actor with same name can only be created once
+        controller = TransferQueueController.options(name="TransferQueueController", lifetime="detached").remote(  # type: ignore[attr-defined]
+            sampler=sampler, polling_mode=final_conf.controller.polling_mode
+        )
+        logger.info("TransferQueueController has been created.")
+    except ValueError:
+        logger.info("Some other rank has initialized TransferQueueController. Try to connect to existing controller.")
+        _init_from_existing()
+        return
 
     controller_zmq_info = process_zmq_server_info(controller)
     final_conf.controller.zmq_info = controller_zmq_info
@@ -176,6 +197,7 @@ def get_meta(
     data_fields: list[str],
     batch_size: int,
     partition_id: str,
+    mode: str = "fetch",
     task_name: Optional[str] = None,
     sampling_config: Optional[dict[str, Any]] = None,
 ) -> BatchMeta:
@@ -200,8 +222,11 @@ def get_meta(
         RuntimeError: If communication fails or controller returns error response
 
     Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
         >>> # Example 1: Basic fetch metadata
-        >>> batch_meta = client.get_meta(
+        >>> batch_meta = tq.get_meta(
         ...     data_fields=["input_ids", "attention_mask"],
         ...     batch_size=4,
         ...     partition_id="train_0",
@@ -211,7 +236,7 @@ def get_meta(
         >>> print(batch_meta.is_ready)  # True if all samples ready
         >>>
         >>> # Example 2: Fetch with self-defined samplers (using GRPOGroupNSampler as an example)
-        >>> batch_meta = client.get_meta(
+        >>> batch_meta = tq.get_meta(
         ...     data_fields=["input_ids", "attention_mask"],
         ...     batch_size=8,
         ...     partition_id="train_0",
@@ -223,7 +248,7 @@ def get_meta(
         >>>
         >>> # Example 3: Force fetch metadata (bypass production status check and Sampler,
         >>> # so may include unready and already-consumed samples. No filtering by consumption status is applied.)
-        >>> batch_meta = client.get_meta(
+        >>> batch_meta = tq.get_meta(
         ...     partition_id="train_0",   # optional
         ...     mode="force_fetch",
         ... )
@@ -231,7 +256,7 @@ def get_meta(
     """
 
     tq_client = _maybe_create_transferqueue_client()
-    return tq_client.get_meta(data_fields, batch_size, partition_id, task_name, sampling_config)
+    return tq_client.get_meta(data_fields, batch_size, partition_id, mode, task_name, sampling_config)
 
 
 async def async_get_meta(
@@ -263,8 +288,11 @@ async def async_get_meta(
         RuntimeError: If communication fails or controller returns error response
 
     Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
         >>> # Example 1: Basic fetch metadata
-        >>> batch_meta = asyncio.run(client.async_get_meta(
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
         ...     data_fields=["input_ids", "attention_mask"],
         ...     batch_size=4,
         ...     partition_id="train_0",
@@ -274,7 +302,7 @@ async def async_get_meta(
         >>> print(batch_meta.is_ready)  # True if all samples ready
         >>>
         >>> # Example 2: Fetch with self-defined samplers (using GRPOGroupNSampler as an example)
-        >>> batch_meta = asyncio.run(client.async_get_meta(
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
         ...     data_fields=["input_ids", "attention_mask"],
         ...     batch_size=8,
         ...     partition_id="train_0",
@@ -285,7 +313,7 @@ async def async_get_meta(
         >>>
         >>> # Example 3: Force fetch metadata (bypass production status check and Sampler,
         >>> # so may include unready and already-consumed samples. No filtering by consumption status is applied.)
-        >>> batch_meta = asyncio.run(client.async_get_meta(
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
         ...     partition_id="train_0",   # optional
         ...     mode="force_fetch",
         ... ))
@@ -307,14 +335,17 @@ def get_data(metadata: BatchMeta) -> TensorDict:
             - Requested data fields (e.g., "prompts", "attention_mask")
 
     Example:
-        >>> batch_meta = client.get_data(
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> batch_meta = tq.get_data(
         ...     data_fields=["prompts", "attention_mask"],
         ...     batch_size=4,
         ...     partition_id="train_0",
         ...     mode="fetch",
         ...     task_name="generate_sequences",
         ... )
-        >>> batch = client.get_data(batch_meta)
+        >>> batch = tq.get_data(batch_meta)
         >>> print(batch)
         >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
     """
@@ -333,14 +364,17 @@ async def async_get_data(metadata: BatchMeta) -> TensorDict:
             - Requested data fields (e.g., "prompts", "attention_mask")
 
     Example:
-        >>> batch_meta = asyncio.run(client.async_get_meta(
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
         ...     data_fields=["prompts", "attention_mask"],
         ...     batch_size=4,
         ...     partition_id="train_0",
         ...     mode="fetch",
         ...     task_name="generate_sequences",
         ... ))
-        >>> batch = asyncio.run(client.async_get_data(batch_meta))
+        >>> batch = asyncio.run(tq.async_get_data(batch_meta))
         >>> print(batch)
         >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
     """
@@ -376,20 +410,23 @@ def put(data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Op
         RuntimeError: If storage operation fails
 
     Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
         >>> batch_size = 4
         >>> seq_len = 16
         >>> current_partition_id = "train_0"
         >>> # Example 1: Normal usage with existing metadata
-        >>> batch_meta = client.get_meta(
+        >>> batch_meta = tq.get_meta(
         ...     data_fields=["prompts", "attention_mask"],
         ...     batch_size=batch_size,
         ...     partition_id=current_partition_id,
         ...     mode="fetch",
         ...     task_name="generate_sequences",
         ... )
-        >>> batch = client.get_data(batch_meta)
+        >>> batch = tq.get_data(batch_meta)
         >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
-        >>> client.put(data=output, metadata=batch_meta)
+        >>> tq.put(data=output, metadata=batch_meta)
         >>>
         >>> # Example 2: Initial data insertion without pre-existing metadata
         >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
@@ -402,7 +439,7 @@ def put(data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Op
         >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
         >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
         >>> # This will create metadata in "insert" mode internally.
-        >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
+        >>> metadata = tq.put(data=prompts_repeated_batch, partition_id=current_partition_id)
     """
     tq_client = _maybe_create_transferqueue_client()
     return tq_client.put(data, metadata, partition_id)
@@ -440,20 +477,23 @@ async def async_put(
         RuntimeError: If storage operation fails
 
     Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
         >>> batch_size = 4
         >>> seq_len = 16
         >>> current_partition_id = "train_0"
         >>> # Example 1: Normal usage with existing metadata
-        >>> batch_meta = asyncio.run(client.async_get_meta(
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
         ...     data_fields=["prompts", "attention_mask"],
         ...     batch_size=batch_size,
         ...     partition_id=current_partition_id,
         ...     mode="fetch",
         ...     task_name="generate_sequences",
         ... ))
-        >>> batch = asyncio.run(client.async_get_data(batch_meta))
+        >>> batch = asyncio.run(tq.async_get_data(batch_meta))
         >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
-        >>> asyncio.run(client.async_put(data=output, metadata=batch_meta))
+        >>> asyncio.run(tq.async_put(data=output, metadata=batch_meta))
         >>>
         >>> # Example 2: Initial data insertion without pre-existing metadata
         >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
@@ -466,7 +506,7 @@ async def async_put(
         >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
         >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
         >>> # This will create metadata in "insert" mode internally.
-        >>> metadata = asyncio.run(client.async_put(data=prompts_repeated_batch, partition_id=current_partition_id))
+        >>> metadata = asyncio.run(tq.async_put(data=prompts_repeated_batch, partition_id=current_partition_id))
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_put(data, metadata, partition_id)
@@ -488,10 +528,13 @@ def set_custom_meta(metadata: BatchMeta) -> None:
         RuntimeError: If communication fails or controller returns error response
 
     Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
         >>> # Create batch with custom metadata
-        >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=4, ...)
+        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=4, ...)
         >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
-        >>> client.set_custom_meta(batch_meta)
+        >>> tq.set_custom_meta(batch_meta)
     """
     tq_client = _maybe_create_transferqueue_client()
     return tq_client.set_custom_meta(metadata)
@@ -517,10 +560,13 @@ async def async_set_custom_meta(
         RuntimeError: If communication fails or controller returns error response
 
     Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
         >>> # Create batch with custom metadata
-        >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=4, ...)
+        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=4, ...)
         >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
-        >>> asyncio.run(client.async_set_custom_meta(batch_meta))
+        >>> asyncio.run(tq.async_set_custom_meta(batch_meta))
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_set_custom_meta(metadata)

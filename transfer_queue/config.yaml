@@ -8,6 +8,7 @@ controller:
   # ZMQ Server IP & Ports (automatically generated during init)
   zmq_info: null
 
+
 backend:
   # Pluggable storage/transport backend of TransferQueue. Choose from:
   # SimpleStorage, Yuanrong, MooncakeStore, ...

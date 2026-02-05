@@ -1037,6 +1037,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         data_fields: list[str],
         batch_size: int,
         partition_id: str,
+        mode: str = "fetch",
         task_name: Optional[str] = None,
         sampling_config: Optional[dict[str, Any]] = None,
     ) -> BatchMeta:
@@ -1094,6 +1095,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
             data_fields=data_fields,
             batch_size=batch_size,
             partition_id=partition_id,
+            mode=mode,
             task_name=task_name,
             sampling_config=sampling_config,
         )
