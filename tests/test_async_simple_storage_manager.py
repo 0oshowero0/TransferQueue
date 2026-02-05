@@ -62,7 +62,7 @@ async def mock_async_storage_manager():
     )
 
     config = {
-        "storage_unit_infos": storage_unit_infos,
+        "zmq_info": storage_unit_infos,
     }
 
     # Mock the handshake process entirely to avoid ZMQ complexity
@@ -198,7 +198,7 @@ async def test_async_storage_manager_mapping_functions():
     )
 
     config = {
-        "storage_unit_infos": storage_unit_infos,
+        "zmq_info": storage_unit_infos,
     }
 
     # Mock ZMQ operations
@@ -272,7 +272,7 @@ async def test_async_storage_manager_error_handling():
     )
 
     config = {
-        "storage_unit_infos": storage_unit_infos,
+        "zmq_info": storage_unit_infos,
     }
 
     # Mock ZMQ operations

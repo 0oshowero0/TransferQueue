@@ -190,6 +190,7 @@ def main():
 
         # Cleanup
         ray.shutdown()
+        tq.close()
         print("\n✓ Cleanup complete")
 
     except Exception as e:

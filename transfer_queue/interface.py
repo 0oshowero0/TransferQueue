@@ -53,7 +53,6 @@ def _maybe_create_transferqueue_client(
         )
 
         backend_name = conf.backend.storage_backend
-        conf.backend[backend_name].controller_info = conf.controller.zmq_info
 
         _TRANSFER_QUEUE_CLIENT.initialize_storage_manager(manager_type=backend_name, config=conf.backend[backend_name])
 
@@ -141,6 +140,8 @@ def init(conf: Optional[DictConfig] = None) -> None:
         _init_from_existing()
     except ValueError:
         logger.info("No TransferQueueController found. Starting first-time initialization...")
+    else:
+        return
 
     # First-time initialize TransferQueue
 

@@ -374,6 +374,7 @@ def demonstrate_real_workflow():
 
     # Cleanup
     tq.clear_partition(partition_id=partition_id)
+    tq.close()
     ray.shutdown()
     print("✓ Partition cleared and resources cleaned up")
 

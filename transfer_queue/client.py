@@ -91,8 +91,7 @@ class AsyncTransferQueueClient:
                           AsyncSimpleStorageManager, KVStorageManager (under development), etc.
             config: Configuration dictionary for the storage manager.
                     For AsyncSimpleStorageManager, must contain the following required keys:
-                    - controller_info: ZMQ server information about the controller
-                    - storage_unit_infos: ZMQ server information about the storage units
+                    - zmq_info: ZMQ server information about the storage units
 
         """
         self.storage_manager = TransferQueueStorageManagerFactory.create(

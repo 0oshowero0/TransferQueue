@@ -288,7 +288,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             metadata, self.global_index_storage_unit_mapping, self.global_index_local_index_mapping
         )
 
-        # retrive data
+        # retrieve data
         tasks = [
             self._get_from_single_storage_unit(meta_group, target_storage_unit=storage_id)
             for storage_id, meta_group in storage_meta_groups.items()
