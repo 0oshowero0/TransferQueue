@@ -81,6 +81,10 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
                 _TRANSFER_QUEUE_STORAGE[f"TransferQueueStorageUnit#{storage_unit_rank}"] = storage_node
                 logger.info(f"TransferQueueStorageUnit#{storage_unit_rank} has been created.")
 
+            storage_zmq_info = process_zmq_server_info(_TRANSFER_QUEUE_STORAGE)
+            backend_name = conf.backend.storage_backend
+            conf.backend[backend_name].zmq_info = storage_zmq_info
+
     return conf
 
 
