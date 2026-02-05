@@ -81,11 +81,6 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
                 _TRANSFER_QUEUE_STORAGE[f"TransferQueueStorageUnit#{storage_unit_rank}"] = storage_node
                 logger.info(f"TransferQueueStorageUnit#{storage_unit_rank} has been created.")
 
-            # extract zmq info
-            storage_zmq_info = process_zmq_server_info(_TRANSFER_QUEUE_STORAGE)
-            backend_name = conf.backend.storage_backend
-            conf.backend[backend_name].zmq_info = storage_zmq_info
-
     return conf
 
 
@@ -97,7 +92,7 @@ def _init_from_existing() -> None:
 
     conf = None
     while conf is None:
-        remote_conf = ray.get(controller.get_config())
+        remote_conf = ray.get(controller.get_config.remote())
         if remote_conf is not None:
             _maybe_create_transferqueue_client(remote_conf)
             logger.info("TransferQueueClient initialized.")
@@ -155,7 +150,6 @@ def init(conf: Optional[DictConfig] = None) -> None:
 
     # create controller
     try:
-        print(final_conf)
         sampler = final_conf.controller.sampler
         if isinstance(sampler, BaseSampler):
             # user pass a pre-initialized sampler instance
@@ -189,6 +183,7 @@ def init(conf: Optional[DictConfig] = None) -> None:
 
     # storage the config into controller
     ray.get(controller.store_config.remote(final_conf))
+    logger.info(f"TransferQueue config: {final_conf}")
 
     # create client
     _maybe_create_transferqueue_client(final_conf)
@@ -623,3 +618,27 @@ async def async_clear_partition(partition_id: str):
     """
     tq_client = _maybe_create_transferqueue_client()
     return await tq_client.async_clear_partition(partition_id)
+
+
+def close():
+    """Close the TransferQueue system."""
+    global _TRANSFER_QUEUE_CLIENT
+    global _TRANSFER_QUEUE_STORAGE
+    if _TRANSFER_QUEUE_CLIENT:
+        _TRANSFER_QUEUE_CLIENT.close()
+        _TRANSFER_QUEUE_CLIENT = None
+
+    try:
+        if _TRANSFER_QUEUE_STORAGE:
+            # only the process that do first-time init can clean the distributed storage
+            for storage in _TRANSFER_QUEUE_STORAGE.values():
+                ray.kill(storage)
+        _TRANSFER_QUEUE_STORAGE = None
+    except Exception:
+        pass
+
+    try:
+        controller = ray.get_actor("TransferQueueController")
+        ray.kill(controller)
+    except Exception:
+        pass

@@ -95,7 +95,9 @@ class AsyncTransferQueueClient:
                     - storage_unit_infos: ZMQ server information about the storage units
 
         """
-        self.storage_manager = TransferQueueStorageManagerFactory.create(manager_type, config)
+        self.storage_manager = TransferQueueStorageManagerFactory.create(
+            manager_type, controller_info=self._controller, config=config
+        )
 
     # TODO (TQStorage): Provide a general dynamic socket function for both Client & Storage @huazhong.
     @staticmethod

@@ -117,7 +117,7 @@ def test_merge_tensors_to_tensordict(mock_create, test_data):
     mock_client = MagicMock()
     mock_create.return_value = mock_client
 
-    manager = KVStorageManager(test_data["cfg"])
+    manager = KVStorageManager(controller_info=MagicMock(), config=test_data["cfg"])
     assert manager.storage_client is mock_client
     assert manager._multi_threads_executor is None
 
@@ -296,9 +296,9 @@ def test_put_data_with_custom_meta_from_storage_client(mock_notify, test_data_fo
     mock_storage_client.put.return_value = mock_custom_meta
 
     # Create manager with mocked dependencies
-    config = {"controller_info": MagicMock(), "client_name": "MockClient"}
+    config = {"client_name": "MockClient"}
     with patch(f"{STORAGE_CLIENT_FACTORY_PATH}.create", return_value=mock_storage_client):
-        manager = KVStorageManager(config)
+        manager = KVStorageManager(controller_info=MagicMock(), config=config)
 
     # Run put_data
     asyncio.run(manager.put_data(test_data_for_put_data["data"], test_data_for_put_data["metadata"]))
@@ -348,7 +348,7 @@ def test_put_data_without_custom_meta(mock_notify, test_data_for_put_data):
     # Create manager with mocked dependencies
     config = {"controller_info": MagicMock(), "client_name": "MockClient"}
     with patch(f"{STORAGE_CLIENT_FACTORY_PATH}.create", return_value=mock_storage_client):
-        manager = KVStorageManager(config)
+        manager = KVStorageManager(controller_info=MagicMock(), config=config)
 
     # Run put_data
     asyncio.run(manager.put_data(test_data_for_put_data["data"], test_data_for_put_data["metadata"]))
@@ -371,7 +371,7 @@ def test_put_data_custom_meta_length_mismatch_raises_error(test_data_for_put_dat
     # Create manager with mocked dependencies
     config = {"controller_info": MagicMock(), "client_name": "MockClient"}
     with patch(f"{STORAGE_CLIENT_FACTORY_PATH}.create", return_value=mock_storage_client):
-        manager = KVStorageManager(config)
+        manager = KVStorageManager(controller_info=MagicMock(), config=config)
 
     # Run put_data and expect ValueError
     with pytest.raises(ValueError) as exc_info:

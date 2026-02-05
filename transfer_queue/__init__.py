@@ -27,6 +27,7 @@ from .interface import (
     async_set_custom_meta,
     clear_partition,
     clear_samples,
+    close,
     get_data,
     get_meta,
     init,
@@ -57,6 +58,7 @@ __all__ = [
     "async_set_custom_meta",
     "async_clear_samples",
     "async_clear_partition",
+    "close",
 ] + [
     "TransferQueueClient",
     "StreamingDataset",

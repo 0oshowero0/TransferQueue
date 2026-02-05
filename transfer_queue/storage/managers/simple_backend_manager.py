@@ -58,8 +58,8 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
     instances using ZMQ communication and dynamic socket management.
     """
 
-    def __init__(self, config: DictConfig[str, Any]):
-        super().__init__(config)
+    def __init__(self, controller_info: ZMQServerInfo, config: DictConfig):
+        super().__init__(controller_info, config)
 
         self.config = config
         server_infos: ZMQServerInfo | dict[str, ZMQServerInfo] | None = config.get("zmq_info", None)
@@ -68,7 +68,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             server_infos = config.get("storage_unit_infos", None)
             if server_infos is not None:
                 warnings.warn(
-                    "The config entry `storage_unit_infos` is deprecated, use `zmq_info` instead.",
+                    "The config entry `storage_unit_infos` will be deprecated in 0.1.7, please use `zmq_info` instead.",
                     category=DeprecationWarning,
                     stacklevel=2,
                 )
