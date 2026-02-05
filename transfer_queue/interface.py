@@ -677,21 +677,21 @@ def kv_clear(keys: list[str] | str) -> None:
     pass
 
 
-async def async_kv_put(key: str, value: TensorDict | dict[str, Any], tags: dict[str, Any]) -> None:
+async def async_kv_put(key: str, field: TensorDict | dict[str, Any], tags: dict[str, Any]) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
     pass
 
 
-async def async_kv_batch_put(keys: list[str], value: TensorDict, tags: list[dict[str, Any]]) -> None:
+async def async_kv_batch_put(keys: list[str], fields: TensorDict, tags: list[dict[str, Any]]) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
     pass
 
 
-async def async_kv_get(keys: list[str] | str) -> tuple[TensorDict, list[dict[str, Any]]]:
+async def async_kv_get(keys: list[str] | str, fields:Optional[list[str]|str] = None) -> tuple[TensorDict, list[dict[str, Any]]]:
     """
     Get from TransferQueue in key-value mode.
     """
