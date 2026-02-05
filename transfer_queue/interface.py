@@ -647,3 +647,59 @@ def close():
         ray.kill(controller)
     except Exception:
         pass
+
+
+def kv_put(key: str, value: TensorDict | dict[str, Any], tags: dict[str, Any]) -> None:
+    """
+    Put to TransferQueue in key-value mode.
+    """
+    pass
+
+
+def kv_batch_put(keys: list[str], value: TensorDict, tags: list[dict[str, Any]]) -> None:
+    """
+    Put to TransferQueue in key-value mode.
+    """
+    pass
+
+
+def kv_get(keys: list[str] | str) -> tuple[TensorDict, list[dict[str, Any]]]:
+    """
+    Get from TransferQueue in key-value mode.
+    """
+    pass
+
+
+def kv_clear(keys: list[str] | str) -> None:
+    """
+    Clear from TransferQueue in key-value mode.
+    """
+    pass
+
+
+async def async_kv_put(key: str, value: TensorDict | dict[str, Any], tags: dict[str, Any]) -> None:
+    """
+    Put to TransferQueue in key-value mode.
+    """
+    pass
+
+
+async def async_kv_batch_put(keys: list[str], value: TensorDict, tags: list[dict[str, Any]]) -> None:
+    """
+    Put to TransferQueue in key-value mode.
+    """
+    pass
+
+
+async def async_kv_get(keys: list[str] | str) -> tuple[TensorDict, list[dict[str, Any]]]:
+    """
+    Get from TransferQueue in key-value mode.
+    """
+    pass
+
+
+async def async_kv_clear(keys: list[str] | str) -> None:
+    """
+    Clear from TransferQueue in key-value mode.
+    """
+    pass
