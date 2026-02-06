@@ -205,8 +205,12 @@ def demonstrate_batch_meta():
     print(f"✓ Extra info: {batch.get_all_extra_info()}")
 
     print("[Example 3] Adding sample-level information through custom_meta...")
-    batch.update_custom_meta([{"uid": "prompt@0", "session_id": "session@0", "model_version": "epoch@0"},
-                              {"uid": "prompt@1", "session_id": "session@0", "model_version": "epoch@0"}])
+    batch.update_custom_meta(
+        [
+            {"uid": "prompt@0", "session_id": "session@0", "model_version": "epoch@0"},
+            {"uid": "prompt@1", "session_id": "session@0", "model_version": "epoch@0"},
+        ]
+    )
     print(f"✓ Custom meta: {batch.get_all_custom_meta()}")
 
     # Example 4: Chunk a batch
