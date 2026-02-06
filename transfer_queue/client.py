@@ -153,6 +153,7 @@ class AsyncTransferQueueClient:
 
         return decorator
 
+    # ==================== Basic API ====================
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_get_meta(
         self,
@@ -605,6 +606,7 @@ class AsyncTransferQueueClient:
         if response_msg.request_type != ZMQRequestType.CLEAR_PARTITION_RESPONSE:
             raise RuntimeError(f"Failed to clear partition {partition_id} in controller.")
 
+    # ==================== Status Query API ====================
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_get_consumption_status(
         self,
@@ -898,6 +900,106 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in get_partition_list: {str(e)}") from e
 
+    # ==================== KV Interface API ====================
+    @dynamic_socket(socket_name="request_handle_socket")
+    async def async_kv_retrieve_keys(
+        self,
+        keys: list[str] | str,
+        create: bool = False,
+        socket: Optional[zmq.asyncio.Socket] = None,
+    ) -> BatchMeta:
+        """Asynchronously retrieve BatchMeta from the controller using user-specified keys.
+
+        Args:
+            keys: List of keys to retrieve from the controller
+            create: Whether to register new keys if not found.
+            socket: ZMQ socket (injected by decorator)
+
+        Returns:
+            metadata: BatchMeta of the corresponding keys
+        """
+
+        if isinstance(keys, str):
+            keys = [keys]
+
+        request_msg = ZMQMessage.create(
+            request_type=ZMQRequestType.KV_RETRIEVE_KEYS,
+            sender_id=self.client_id,
+            receiver_id=self._controller.id,
+            body={
+                "keys": keys,
+                "create": create,
+            },
+        )
+
+        try:
+            assert socket is not None
+            await socket.send_multipart(request_msg.serialize())
+            response_serialized = await socket.recv_multipart()
+            response_msg = ZMQMessage.deserialize(response_serialized)
+            logger.debug(
+                f"[{self.client_id}]: Client get kv_retrieve_keys response: {response_msg} "
+                f"from controller {self._controller.id}"
+            )
+
+            if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE:
+                metadata = response_msg.body.get("metadata", None)
+                return metadata
+            else:
+                raise RuntimeError(
+                    f"[{self.client_id}]: Failed to retrieve keys from controller {self._controller.id}: "
+                    f"{response_msg.body.get('message', 'Unknown error')}"
+                )
+        except Exception as e:
+            raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_keys: {str(e)}") from e
+
+    @dynamic_socket(socket_name="request_handle_socket")
+    async def async_kv_list(
+        self,
+        partition_id: Optional[str] = None,
+        socket: Optional[zmq.asyncio.Socket] = None,
+    ) -> BatchMeta:
+        """Asynchronously retrieve keys from the controller for partition.
+
+        Args:
+            partition_id: Partition to retrieve from the controller
+            socket: ZMQ socket (injected by decorator)
+
+        Returns:
+            keys: list of keys in the partition
+        """
+
+        request_msg = ZMQMessage.create(
+            request_type=ZMQRequestType.KV_LIST,
+            sender_id=self.client_id,
+            receiver_id=self._controller.id,
+            body={
+                "partition_id": partition_id,
+            },
+        )
+
+        try:
+            assert socket is not None
+            await socket.send_multipart(request_msg.serialize())
+            response_serialized = await socket.recv_multipart()
+            response_msg = ZMQMessage.deserialize(response_serialized)
+            logger.debug(
+                f"[{self.client_id}]: Client get kv_list response: {response_msg} "
+                f"from controller {self._controller.id}"
+            )
+
+            if response_msg.request_type == ZMQRequestType.KV_LIST_RESPONSE:
+                keys = response_msg.body.get("keys", None)
+                return keys
+            else:
+                raise RuntimeError(
+                    f"[{self.client_id}]: Failed to list keys from controller {self._controller.id}: "
+                    f"{response_msg.body.get('message', 'Unknown error')}"
+                )
+        except Exception as e:
+            raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_keys: {str(e)}") from e
+
+
     def close(self) -> None:
         """Close the client and cleanup resources including storage manager."""
         try:
@@ -972,6 +1074,8 @@ class TransferQueueClient(AsyncTransferQueueClient):
         self._get_partition_list = _make_sync(self.async_get_partition_list)
         self._set_custom_meta = _make_sync(self.async_set_custom_meta)
         self._reset_consumption = _make_sync(self.async_reset_consumption)
+        self._kv_retrieve_keys = _make_sync(self.async_kv_retrieve_keys)
+        self._kv_list = _make_sync(self.async_kv_list)
 
     def put(
         self, data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None
@@ -1285,6 +1389,39 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
 
         return self._set_custom_meta(metadata=metadata)
+
+
+    def kv_retrieve_keys(
+        self,
+        keys: list[str] | str,
+        create: bool = False,
+    ) -> BatchMeta:
+        """Synchronously retrieve BatchMeta from the controller using user-specified keys.
+
+        Args:
+            keys: List of keys to retrieve from the controller
+            create: Whether to register new keys if not found.
+
+        Returns:
+            metadata: BatchMeta of the corresponding keys
+        """
+
+        return self._kv_retrieve_keys(keys=keys, create=create)
+
+    def kv_list(
+        self,
+        partition_id: Optional[str] = None,
+    ) -> BatchMeta:
+        """Synchronously retrieve keys from the controller for partition.
+
+        Args:
+            partition_id: Partition to retrieve from the controller
+
+        Returns:
+            keys: list of keys in the partition
+        """
+
+        return self._kv_list(partition_id=partition_id)
 
     def close(self) -> None:
         """Close the client and cleanup resources including event loop and thread."""

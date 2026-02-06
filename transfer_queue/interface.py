@@ -669,6 +669,7 @@ def kv_get(keys: list[str] | str) -> tuple[TensorDict, list[dict[str, Any]]]:
     """
     pass
 
+
 def kv_list(partition: str) -> list[str]:
     """
     List all keys in TransferQueue speficied partition.
@@ -690,7 +691,9 @@ async def async_kv_put(key: str, field: Optional[TensorDict | dict[str, Any]], t
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to TQ BatchMeta
-    batch_meta = await tq_client.async_kv_create_keys(keys=[key])   # 如果有，返回对应global index对应的batch_meta；如果没有，调用get_meta的insert模式新注册一个
+    batch_meta = await tq_client.async_kv_create_keys(
+        keys=[key]
+    )  # 如果有，返回对应global index对应的batch_meta；如果没有，调用get_meta的insert模式新注册一个
 
     # 2. 将用户传入的tags写入batch_meta
 
@@ -704,7 +707,9 @@ async def async_kv_batch_put(keys: list[str], fields: TensorDict, tags: list[dic
     pass
 
 
-async def async_kv_get(keys: list[str] | str, fields:Optional[list[str]|str] = None) -> tuple[TensorDict, list[dict[str, Any]]]:
+async def async_kv_get(
+    keys: list[str] | str, fields: Optional[list[str] | str] = None
+) -> tuple[TensorDict, list[dict[str, Any]]]:
     """
     Get from TransferQueue in key-value mode.
     """
@@ -715,6 +720,7 @@ async def async_kv_get(keys: list[str] | str, fields:Optional[list[str]|str] = N
     data = await tq_client.async_get_data(batch_meta)
 
     return data
+
 
 async def async_kv_list(partition: str) -> list[str]:
     """
