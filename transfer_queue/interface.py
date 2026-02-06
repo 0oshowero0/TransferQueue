@@ -670,7 +670,7 @@ def kv_put(
         batch_meta.update_custom_meta([tag])
 
     # 3. put data
-    if fields:
+    if fields is not None:
         if isinstance(fields, dict):
             # TODO: consider whether to support this...
             batch = {}
@@ -711,7 +711,7 @@ def kv_batch_put(keys: list[str], partition_id: str, fields: TensorDict, tags: l
         batch_meta.update_custom_meta(tags)
 
     # 3. put data
-    if fields:
+    if fields is not None:
         tq_client.put(fields, batch_meta)
     else:
         # directly update custom_meta (tags) to controller
@@ -726,7 +726,7 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
 
     batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
 
-    if fields:
+    if fields is not None:
         if isinstance(fields, str):
             fields = [fields]
         batch_meta = batch_meta.select_fields(fields)
@@ -790,7 +790,7 @@ async def async_kv_put(
         batch_meta.update_custom_meta([tag])
 
     # 3. put data
-    if fields:
+    if fields is not None:
         if isinstance(fields, dict):
             # TODO: consider whether to support this...
             batch = {}
@@ -833,7 +833,7 @@ async def async_kv_batch_put(
         batch_meta.update_custom_meta(tags)
 
     # 3. put data
-    if fields:
+    if fields is not None:
         await tq_client.async_put(fields, batch_meta)
     else:
         # directly update custom_meta (tags) to controller
@@ -850,7 +850,7 @@ async def async_kv_get(
 
     batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
 
-    if fields:
+    if fields is not None:
         if isinstance(fields, str):
             fields = [fields]
         batch_meta = batch_meta.select_fields(fields)
