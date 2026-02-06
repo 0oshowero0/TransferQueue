@@ -996,8 +996,7 @@ class AsyncTransferQueueClient:
             response_serialized = await socket.recv_multipart()
             response_msg = ZMQMessage.deserialize(response_serialized)
             logger.debug(
-                f"[{self.client_id}]: Client get kv_list response: {response_msg} "
-                f"from controller {self._controller.id}"
+                f"[{self.client_id}]: Client get kv_list response: {response_msg} from controller {self._controller.id}"
             )
 
             if response_msg.request_type == ZMQRequestType.KV_LIST_RESPONSE:
@@ -1010,7 +1009,6 @@ class AsyncTransferQueueClient:
                 )
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_keys: {str(e)}") from e
-
 
     def close(self) -> None:
         """Close the client and cleanup resources including storage manager."""
@@ -1401,7 +1399,6 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
 
         return self._set_custom_meta(metadata=metadata)
-
 
     def kv_retrieve_keys(
         self,

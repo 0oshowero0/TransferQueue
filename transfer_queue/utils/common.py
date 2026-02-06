@@ -15,15 +15,15 @@
 
 import logging
 import os
-from contextlib import contextmanager
-from typing import Optional, Any
-import numpy as np
-from tensordict import TensorDict, NonTensorStack
 from collections.abc import Iterable
+from contextlib import contextmanager
+from typing import Any, Optional
 
+import numpy as np
 import psutil
 import ray
 import torch
+from tensordict import NonTensorStack, TensorDict
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
@@ -153,7 +153,7 @@ def dict_to_tensordict(data: dict[str, Any]) -> TensorDict:
                 final_batch_size = deterministic_non_tensor_batch_size
 
     if not final_batch_size:
-        raise RuntimeError(f"Cannot correctly determine batch_size for input.")
+        raise RuntimeError("Cannot correctly determine batch_size for input.")
 
     if tensor_batch_size:
         if tensor_batch_size != final_batch_size:
@@ -163,6 +163,5 @@ def dict_to_tensordict(data: dict[str, Any]) -> TensorDict:
                     batch[k] = v.unsqueeze(0)
                 elif isinstance(v, np.ndarray):
                     batch[k] = np.expand_dims(v, 0)
-
 
     return TensorDict(batch, batch_size=[final_batch_size])

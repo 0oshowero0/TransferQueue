@@ -330,9 +330,13 @@ class BatchMeta:
             return
 
         if len(custom_meta) != self.size:
-            raise ValueError(f"The length of custom_meta list {len(custom_meta)} must match the batch size: {self.size}")
+            raise ValueError(
+                f"The length of custom_meta list {len(custom_meta)} must match the batch size: {self.size}"
+            )
 
-        custom_meta_dict: dict[int, dict[str, Any]] = {self.global_indexes[i]: custom_meta[i] for i in range(len(custom_meta))}
+        custom_meta_dict: dict[int, dict[str, Any]] = {
+            self.global_indexes[i]: custom_meta[i] for i in range(len(custom_meta))
+        }
 
         self.custom_meta.update(custom_meta_dict)
 

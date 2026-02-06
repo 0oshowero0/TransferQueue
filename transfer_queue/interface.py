@@ -651,20 +651,19 @@ def close():
         pass
 
 
-def kv_put(key: str, partition_id:str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]) -> None:
+def kv_put(
+    key: str, partition_id: str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]
+) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
     if fields is None and tag is None:
-        raise ValueError(f"Please provide at least one parameter of fields or tag.")
-
+        raise ValueError("Please provide at least one parameter of fields or tag.")
 
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = tq_client.kv_retrieve_keys(
-        keys=[key], partition_id=partition_id, create=True
-    )
+    batch_meta = tq_client.kv_retrieve_keys(keys=[key], partition_id=partition_id, create=True)
 
     # 2. register the user-specified tag to BatchMeta
     if tag:
@@ -684,7 +683,7 @@ def kv_put(key: str, partition_id:str, fields: Optional[TensorDict | dict[str, A
                     batch[key] = NonTensorStack(value)
             fields = TensorDict(batch, batch_size=[1])
         elif not isinstance(fields, TensorDict):
-            raise ValueError(f"field can only be dict or TensorDict")
+            raise ValueError("field can only be dict or TensorDict")
 
         # custom_meta (tag) will be put to controller through the put process
         tq_client.put(fields, batch_meta)
@@ -693,19 +692,17 @@ def kv_put(key: str, partition_id:str, fields: Optional[TensorDict | dict[str, A
         tq_client.set_custom_meta(batch_meta)
 
 
-def kv_batch_put(keys: list[str], partition_id:str, fields: TensorDict, tags: list[dict[str, Any]]) -> None:
+def kv_batch_put(keys: list[str], partition_id: str, fields: TensorDict, tags: list[dict[str, Any]]) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
     if fields is None and tags is None:
-        raise ValueError(f"Please provide at least one parameter of fields or tag.")
+        raise ValueError("Please provide at least one parameter of fields or tag.")
 
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = tq_client.kv_retrieve_keys(
-        keys=keys, partition_id=partition_id, create=True
-    )
+    batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=True)
 
     # 2. register the user-specified tags to BatchMeta
     if tags:
@@ -721,8 +718,7 @@ def kv_batch_put(keys: list[str], partition_id:str, fields: TensorDict, tags: li
         tq_client.set_custom_meta(batch_meta)
 
 
-def kv_get(    keys: list[str] | str, partition_id:str, fields: Optional[list[str] | str] = None
-) -> TensorDict:
+def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None) -> TensorDict:
     """
     Get from TransferQueue in key-value mode.
     """
@@ -759,7 +755,7 @@ def kv_list(partition_id: str) -> tuple[Optional[list[str]], Optional[list[dict[
     return keys, custom_meta
 
 
-def kv_clear(keys: list[str] | str, partition_id:str) -> None:
+def kv_clear(keys: list[str] | str, partition_id: str) -> None:
     """
     Clear from TransferQueue in key-value mode.
     """
@@ -773,21 +769,21 @@ def kv_clear(keys: list[str] | str, partition_id:str) -> None:
     if batch_meta.size > 0:
         tq_client.clear_samples(batch_meta)
 
-async def async_kv_put(key: str, partition_id:str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]) -> None:
+
+async def async_kv_put(
+    key: str, partition_id: str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]
+) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
 
     if fields is None and tag is None:
-        raise ValueError(f"Please provide at least one parameter of fields or tag.")
-
+        raise ValueError("Please provide at least one parameter of fields or tag.")
 
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = await tq_client.async_kv_retrieve_keys(
-        keys=[key], partition_id=partition_id, create=True
-    )
+    batch_meta = await tq_client.async_kv_retrieve_keys(keys=[key], partition_id=partition_id, create=True)
 
     # 2. register the user-specified tag to BatchMeta
     if tag:
@@ -807,7 +803,7 @@ async def async_kv_put(key: str, partition_id:str, fields: Optional[TensorDict |
                     batch[key] = NonTensorStack(value)
             fields = TensorDict(batch, batch_size=[1])
         elif not isinstance(fields, TensorDict):
-            raise ValueError(f"field can only be dict or TensorDict")
+            raise ValueError("field can only be dict or TensorDict")
 
         # custom_meta (tag) will be put to controller through the put process
         await tq_client.async_put(fields, batch_meta)
@@ -816,19 +812,19 @@ async def async_kv_put(key: str, partition_id:str, fields: Optional[TensorDict |
         await tq_client.async_set_custom_meta(batch_meta)
 
 
-async def async_kv_batch_put(keys: list[str], partition_id:str, fields: TensorDict, tags: list[dict[str, Any]]) -> None:
+async def async_kv_batch_put(
+    keys: list[str], partition_id: str, fields: TensorDict, tags: list[dict[str, Any]]
+) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
     if fields is None and tags is None:
-        raise ValueError(f"Please provide at least one parameter of fields or tag.")
+        raise ValueError("Please provide at least one parameter of fields or tag.")
 
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = await tq_client.async_kv_retrieve_keys(
-        keys=keys, partition_id=partition_id, create=True
-    )
+    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=True)
 
     # 2. register the user-specified tags to BatchMeta
     if tags:
@@ -844,9 +840,8 @@ async def async_kv_batch_put(keys: list[str], partition_id:str, fields: TensorDi
         await tq_client.async_set_custom_meta(batch_meta)
 
 
-
 async def async_kv_get(
-    keys: list[str] | str, partition_id:str, fields: Optional[list[str] | str] = None
+    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None
 ) -> TensorDict:
     """
     Get from TransferQueue in key-value mode.
@@ -884,7 +879,7 @@ async def async_kv_list(partition_id: str) -> tuple[Optional[list[str]], Optiona
     return keys, custom_meta
 
 
-async def async_kv_clear(keys: list[str] | str, partition_id:str) -> None:
+async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
     """
     Clear from TransferQueue in key-value mode.
     """
@@ -897,5 +892,3 @@ async def async_kv_clear(keys: list[str] | str, partition_id:str) -> None:
 
     if batch_meta.size > 0:
         await tq_client.async_clear_samples(batch_meta)
-
-

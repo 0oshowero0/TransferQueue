@@ -851,8 +851,10 @@ class TestClientCustomMetaInterface:
         # Set custom_meta on the metadata
         metadata.update_custom_meta(
             {
-                [{"input_ids": {"token_count": 100}},
-                {"input_ids": {"token_count": 120}},]
+                [
+                    {"input_ids": {"token_count": 100}},
+                    {"input_ids": {"token_count": 120}},
+                ]
             }
         )
 
@@ -870,8 +872,10 @@ class TestClientCustomMetaInterface:
         # Set custom_meta on the metadata
         metadata.update_custom_meta(
             {
-                [{"input_ids": {"token_count": 100}},
-                 {"input_ids": {"token_count": 120}},]
+                [
+                    {"input_ids": {"token_count": 100}},
+                    {"input_ids": {"token_count": 120}},
+                ]
             }
         )
 

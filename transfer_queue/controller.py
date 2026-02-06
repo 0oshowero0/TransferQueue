@@ -1461,14 +1461,13 @@ class TransferQueueController:
             metadata: BatchMeta of the requested keys
         """
 
-        logger.debug(
-            f"[{self.controller_id}]: Retrieve keys {keys} in partition {partition_id}"
-        )
+        logger.debug(f"[{self.controller_id}]: Retrieve keys {keys} in partition {partition_id}")
 
         if partition_id not in self.partitions:
             if not create:
-                logger.warning(f"Partition {partition_id} not found in controller for kv_retrieve_keys, "
-                               f"return empty BatchMeta")
+                logger.warning(
+                    f"Partition {partition_id} not found in controller for kv_retrieve_keys, return empty BatchMeta"
+                )
                 return BatchMeta.empty()
             else:
                 self.create_partition(partition_id)
@@ -1480,8 +1479,9 @@ class TransferQueueController:
         none_indexes = [idx for idx, value in enumerate(global_indexes) if value is None]
         if len(none_indexes) > 0:
             if not create:
-                raise RuntimeError(f"Keys {[keys[i] for i in none_indexes]} were not found "
-                                   f"in partition {partition_id}!")
+                raise RuntimeError(
+                    f"Keys {[keys[i] for i in none_indexes]} were not found in partition {partition_id}!"
+                )
             else:
                 # create non-exist keys
                 batch_global_indexes = partition.activate_pre_allocated_indexes(len(none_indexes))
@@ -1498,11 +1498,11 @@ class TransferQueueController:
                 # register key-global_indexes mapping in partition
                 for i in range(len(none_indexes)):
                     global_indexes[none_indexes[i]] = batch_global_indexes[i]
-                    partition.keys_mapping.update({keys[none_indexes[i]]:batch_global_indexes[i]})
+                    partition.keys_mapping.update({keys[none_indexes[i]]: batch_global_indexes[i]})
 
         data_fields = partition.field_name_mapping.keys()
 
-        metadata = self.generate_batch_meta(partition_id, global_indexes, data_fields, mode='force_fetch')
+        metadata = self.generate_batch_meta(partition_id, global_indexes, data_fields, mode="force_fetch")
 
         return metadata
 
@@ -1825,7 +1825,7 @@ class TransferQueueController:
                         logger.debug(f"[{self.controller_id}]: {message}")
                     else:
                         keys = partition.keys_mapping.keys()
-                        message = f"Success"
+                        message = "Success"
 
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.KV_LIST_RESPONSE,

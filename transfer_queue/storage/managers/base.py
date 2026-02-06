@@ -581,7 +581,9 @@ class KVStorageManager(TransferQueueStorageManager):
         per_field_custom_backend_meta: dict[int, dict[str, Any]] = {}
         if custom_backend_meta:
             if len(custom_backend_meta) != len(keys):
-                raise ValueError(f"Length of custom_backend_meta ({len(custom_backend_meta)}) does not match expected ({len(keys)})")
+                raise ValueError(
+                    f"Length of custom_backend_meta ({len(custom_backend_meta)}) does not match expected ({len(keys)})"
+                )
             # custom meta is a flat list aligned with keys/values
             # Use itertools.product to eliminate nested loops
             for global_idx in metadata.global_indexes:
