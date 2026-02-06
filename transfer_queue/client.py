@@ -680,7 +680,7 @@ class AsyncTransferQueueClient:
         partition_id: str,
         socket: Optional[zmq.asyncio.Socket] = None,
     ) -> tuple[Optional[Tensor], Optional[Tensor]]:
-        """Get production status for current partition for specific fields.
+        """Get production status for specific data fields and partition.
 
         Args:
             data_fields: Data fields to check production status for
@@ -770,6 +770,41 @@ class AsyncTransferQueueClient:
             return False
         return torch.all(consumption_status == 1).item()
 
+    async def async_check_production_status(
+        self,
+        data_fields: list[str],
+        partition_id: str,
+    ) -> bool:
+        """Check if the all specific fields of samples for current partition are ready
+        (produced) for consumption.
+
+        Args:
+            data_fields: Data fields to check production status for
+            partition_id: Partition id to check production status for
+
+        Returns:
+            bool: True if all samples have been produced and ready, False otherwise
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
+        Example:
+            >>> # Check if all samples are ready for consumption
+            >>> is_ready = asyncio.run(client.async_check_production_status(
+            ...     data_fields=["input_ids", "attention_mask"],
+            ...     partition_id="train_0"
+            ... ))
+            >>> print(f"All samples ready: {is_ready}")
+        """
+        _, production_status = await self.async_get_production_status(
+            data_fields=data_fields,
+            partition_id=partition_id,
+        )
+
+        if production_status is None:
+            return False
+        return torch.all(production_status == 1).item()
+
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_reset_consumption(
         self,
@@ -777,17 +812,22 @@ class AsyncTransferQueueClient:
         task_name: Optional[str] = None,
         socket: Optional[zmq.asyncio.Socket] = None,
     ) -> bool:
-        """Reset consumption status for a partition, allowing data to be re-consumed.
-        This is useful for debugging scenarios where the same rollout data needs to be
-        trained multiple times without regenerating the data.
+        """Aynchronously reset consumption status for a partition.
+
+        This allows the same data to be re-consumed, useful for debugging scenarios
+        where the same rollout data needs to be trained multiple times.
+
         Args:
             partition_id: Partition id to reset consumption status for
             task_name: Name of the task to reset. If None, resets all tasks.
             socket: ZMQ async socket for message transmission (injected by decorator)
+
         Returns:
             bool: True if reset was successful, False otherwise
+
         Raises:
             RuntimeError: If communication fails or controller returns error response
+
         Example:
             >>> # Reset consumption for train task to re-train on same data
             >>> success = asyncio.run(client.async_reset_consumption(
@@ -827,41 +867,6 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in reset_consumption: {str(e)}") from e
 
-    async def async_check_production_status(
-        self,
-        data_fields: list[str],
-        partition_id: str,
-    ) -> bool:
-        """Check if the all specific fields of samples for current partition are ready
-        (produced) for consumption.
-
-        Args:
-            data_fields: Data fields to check production status for
-            partition_id: Partition id to check production status for
-
-        Returns:
-            bool: True if all samples have been produced and ready, False otherwise
-
-        Raises:
-            RuntimeError: If communication fails or controller returns error response
-
-        Example:
-            >>> # Check if all samples are ready for consumption
-            >>> is_ready = asyncio.run(client.async_check_production_status(
-            ...     data_fields=["input_ids", "attention_mask"],
-            ...     partition_id="train_0"
-            ... ))
-            >>> print(f"All samples ready: {is_ready}")
-        """
-        _, production_status = await self.async_get_production_status(
-            data_fields=data_fields,
-            partition_id=partition_id,
-        )
-
-        if production_status is None:
-            return False
-        return torch.all(production_status == 1).item()
-
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_get_partition_list(
         self,
@@ -874,6 +879,10 @@ class AsyncTransferQueueClient:
 
         Returns:
             list[str]: List of partition ids managed by the controller
+
+        Example:
+            >>> partition_ids = asyncio.run(client.get_partition_list())
+            >>> print(f"Available partitions: {partition_ids}")
         """
         request_msg = ZMQMessage.create(
             request_type=ZMQRequestType.GET_LIST_PARTITIONS,
@@ -916,7 +925,7 @@ class AsyncTransferQueueClient:
 
         Args:
             keys: List of keys to retrieve from the controller
-            partition_id: Partition id to retrieve from the controller
+            partition_id: The ID of the logical partition to search for keys.
             create: Whether to register new keys if not found.
             socket: ZMQ socket (injected by decorator)
 
@@ -976,7 +985,7 @@ class AsyncTransferQueueClient:
         partition_id: str,
         socket: Optional[zmq.asyncio.Socket] = None,
     ) -> tuple[list[str], list[dict]]:
-        """Asynchronously retrieve keys from the controller for partition.
+        """Asynchronously retrieve keys and custom_meta from the controller for partition.
 
         Args:
             partition_id: Partition to retrieve from the controller
@@ -984,6 +993,7 @@ class AsyncTransferQueueClient:
 
         Returns:
             keys: list of keys in the partition
+            custom_meta: list of dict for custom_meta
         """
 
         if partition_id is None:
@@ -1312,6 +1322,9 @@ class TransferQueueClient(AsyncTransferQueueClient):
             - Partition global index tensor
             - Consumption status tensor for the specified task. 1 for consumed, 0 for not consumed.
 
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
         Example:
             >>> global_index, consumption_status = client.get_consumption_status(
             ...     task_name="generate_sequences",
@@ -1320,6 +1333,34 @@ class TransferQueueClient(AsyncTransferQueueClient):
             >>> print(f"Global index: {global_index}, Consumption status: {consumption_status}")
         """
         return self._get_consumption_status(task_name, partition_id)
+
+    def get_production_status(
+        self,
+        data_fields: list[str],
+        partition_id: str,
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
+        """Synchronously get production status for specific data fields and partition.
+
+        Args:
+            data_fields: Data fields to check production status for
+            partition_id: Partition id to check production status for
+
+        Returns:
+            Tuple of:
+            - Partition global index tensor
+            - Production status tensor for the specified fields. 1 for ready, 0 for not ready.
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
+        Example:
+            >>> global_index, production_status = client.get_production_status(
+            ...     data_fields=["input_ids", "attention_mask"],
+            ...     partition_id="train_0"
+            ... )
+            >>> print(f"Global index: {global_index}, Production status: {production_status}")
+        """
+        return self._get_production_status(data_fields=data_fields, partition_id=partition_id)
 
     def check_consumption_status(self, task_name: str, partition_id: str) -> bool:
         """Synchronously check if all samples for a partition have been consumed by a specific task.
@@ -1344,24 +1385,15 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
         return self._check_consumption_status(task_name=task_name, partition_id=partition_id)
 
-    def reset_consumption(self, partition_id: str, task_name: Optional[str] = None) -> bool:
-        """Synchronously reset consumption status for a partition.
-        This allows the same data to be re-consumed, useful for debugging scenarios
-        where the same rollout data needs to be trained multiple times.
-        Args:
-            partition_id: Partition id to reset consumption status for
-            task_name: Name of the task to reset. If None, resets all tasks.
-        Returns:
-            bool: True if reset was successful, False otherwise
-        """
-        return self._reset_consumption(partition_id, task_name)
-
     def check_production_status(self, data_fields: list[str], partition_id: str) -> bool:
         """Synchronously check if all samples for a partition are ready (produced) for consumption.
 
         Args:
             data_fields: Data fields to check production status for
             partition_id: Partition id to check production status for
+
+        Returns:
+            bool: True if all samples have been produced and ready, False otherwise
 
         Raises:
             RuntimeError: If communication fails or controller returns error response
@@ -1376,30 +1408,31 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
         return self._check_production_status(data_fields=data_fields, partition_id=partition_id)
 
-    def get_production_status(
-        self,
-        data_fields: list[str],
-        partition_id: str,
-    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
-        """Synchronously get production status for a specific data fields and partition.
+    def reset_consumption(self, partition_id: str, task_name: Optional[str] = None) -> bool:
+        """Synchronously reset consumption status for a partition.
+
+        This allows the same data to be re-consumed, useful for debugging scenarios
+        where the same rollout data needs to be trained multiple times.
 
         Args:
-            data_fields: Data fields to check production status for
-            partition_id: Partition id to check production status for
+            partition_id: Partition id to reset consumption status for
+            task_name: Name of the task to reset. If None, resets all tasks.
 
         Returns:
-            Tuple of:
-            - Partition global index tensor
-            - Production status tensor for the specified fields. 1 for ready, 0 for not ready.
+            bool: True if reset was successful, False otherwise
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
 
         Example:
-            >>> global_index, production_status = client.get_production_status(
-            ...     data_fields=["input_ids", "attention_mask"],
-            ...     partition_id="train_0"
+            >>> # Reset consumption for train task to re-train on same data
+            >>> success = client.reset_consumption(
+            ...     partition_id="train_0",
+            ...     task_name="train"
             ... )
-            >>> print(f"Global index: {global_index}, Production status: {production_status}")
+            >>> print(f"Reset successful: {success}")
         """
-        return self._get_production_status(data_fields=data_fields, partition_id=partition_id)
+        return self._reset_consumption(partition_id, task_name)
 
     def get_partition_list(
         self,
@@ -1408,6 +1441,10 @@ class TransferQueueClient(AsyncTransferQueueClient):
 
         Returns:
             list[str]: List of partition ids managed by the controller
+
+        Example:
+            >>> partition_ids = client.get_partition_list()
+            >>> print(f"Available partitions: {partition_ids}")
         """
         return self._get_partition_list()
 
@@ -1422,7 +1459,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
 
         Args:
             keys: List of keys to retrieve from the controller
-            partition_id: Partition id to retrieve from the controller
+            partition_id: The ID of the logical partition to search for keys.
             create: Whether to register new keys if not found.
 
         Returns:
@@ -1438,13 +1475,14 @@ class TransferQueueClient(AsyncTransferQueueClient):
         self,
         partition_id: str,
     ) -> tuple[list[Optional[str]], list[Optional[dict]]]:
-        """Synchronously retrieve keys from the controller for partition.
+        """Synchronously retrieve keys and custom_meta from the controller for partition.
 
         Args:
             partition_id: Partition to retrieve from the controller
 
         Returns:
             keys: list of keys in the partition
+            custom_meta: list of dict for custom_meta
         """
 
         return self._kv_list(partition_id=partition_id)
