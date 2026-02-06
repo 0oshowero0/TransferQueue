@@ -556,7 +556,7 @@ class KVStorageManager(TransferQueueStorageManager):
         loop = asyncio.get_event_loop()
 
         # put <keys, values> to storage backends
-        custom_meta = await loop.run_in_executor(None, self.storage_client.put, keys, values)
+        custom_backend_meta = await loop.run_in_executor(None, self.storage_client.put, keys, values)
 
         per_field_dtypes: dict[int, dict[str, Any]] = {}
         per_field_shapes: dict[int, dict[str, Any]] = {}
@@ -577,24 +577,24 @@ class KVStorageManager(TransferQueueStorageManager):
                     getattr(data_item, "shape", None) if isinstance(data_item, Tensor) else None
                 )
 
-        # Prepare per-field custom_meta if available
-        per_field_custom_meta: dict[int, dict[str, Any]] = {}
-        if custom_meta:
-            if len(custom_meta) != len(keys):
-                raise ValueError(f"Length of custom_meta ({len(custom_meta)}) does not match expected ({len(keys)})")
+        # Prepare per-field custom_backend_meta if available
+        per_field_custom_backend_meta: dict[int, dict[str, Any]] = {}
+        if custom_backend_meta:
+            if len(custom_backend_meta) != len(keys):
+                raise ValueError(f"Length of custom_backend_meta ({len(custom_backend_meta)}) does not match expected ({len(keys)})")
             # custom meta is a flat list aligned with keys/values
             # Use itertools.product to eliminate nested loops
             for global_idx in metadata.global_indexes:
-                per_field_custom_meta[global_idx] = {}
+                per_field_custom_backend_meta[global_idx] = {}
 
             # TODO(tianyi): the order of custom meta is coupled with keys/values
             for (field_name, global_idx), meta_value in zip(
                 itertools.product(sorted(metadata.field_names), metadata.global_indexes),
-                custom_meta,
+                custom_backend_meta,
                 strict=True,
             ):
-                per_field_custom_meta[global_idx][field_name] = meta_value
-            metadata.update_custom_meta(per_field_custom_meta)
+                per_field_custom_backend_meta[global_idx][field_name] = meta_value
+            metadata._custom_backend_meta.update(per_field_custom_backend_meta)
 
         # Get current data partition id
         # Note: Currently we only support putting to & getting data from a single data partition simultaneously,
@@ -607,7 +607,7 @@ class KVStorageManager(TransferQueueStorageManager):
             metadata.global_indexes,
             per_field_dtypes,
             per_field_shapes,
-            per_field_custom_meta,
+            per_field_custom_backend_meta,
         )
 
     async def get_data(self, metadata: BatchMeta) -> TensorDict:

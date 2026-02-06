@@ -1351,7 +1351,7 @@ class TransferQueueController:
         custom_backend_meta = partition.get_field_custom_backend_meta(batch_global_indexes, data_fields)
 
         batch_meta = BatchMeta(samples=samples)
-        batch_meta.update_custom_meta(custom_meta)
+        batch_meta.update_custom_meta([custom_meta[idx] for idx in batch_meta.global_indexes])
         batch_meta._custom_backend_meta.update(custom_backend_meta)
         return batch_meta
 

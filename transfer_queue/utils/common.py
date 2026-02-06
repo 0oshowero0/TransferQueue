@@ -16,7 +16,10 @@
 import logging
 import os
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Any
+import numpy as np
+from tensordict import TensorDict, NonTensorStack
+from collections.abc import Iterable
 
 import psutil
 import ray
@@ -98,3 +101,68 @@ def get_env_bool(env_key: str, default: bool = False) -> bool:
 
     true_values = {"true", "1", "yes", "y", "on"}
     return env_value_lower in true_values
+
+
+def dict_to_tensordict(data: dict[str, Any]) -> TensorDict:
+    """
+    Create a TensorDict from a dict of tensors and non_tensors.
+    """
+
+    batch = {}
+
+    final_batch_size = None
+    tensor_batch_size = None
+    deterministic_tensor_batch_size = None
+    deterministic_non_tensor_batch_size = None
+
+    for key, val in data.items():
+        if isinstance(val, torch.Tensor):
+            if val.is_nested and val.layout == torch.strided:
+                # must use unbind for strided nested tensor
+                deterministic_tensor_batch_size = len(val.unbind())
+            else:
+                tensor_batch_size = val.shape[0]
+            batch[key] = val
+        elif isinstance(val, np.ndarray):
+            batch[key] = val
+            tensor_batch_size = val.shape[0]
+        elif isinstance(val, str):
+            batch[key] = val
+            deterministic_non_tensor_batch_size = 1
+        elif isinstance(val, Iterable):
+            batch[key] = NonTensorStack(*val)
+            deterministic_non_tensor_batch_size = len(val)
+        else:
+            batch[key] = NonTensorStack(val)
+            deterministic_non_tensor_batch_size = 1
+
+        if deterministic_tensor_batch_size:
+            if deterministic_non_tensor_batch_size:
+                assert deterministic_non_tensor_batch_size == deterministic_tensor_batch_size
+            if final_batch_size:
+                assert final_batch_size == deterministic_tensor_batch_size
+            else:
+                final_batch_size = deterministic_tensor_batch_size
+
+        if deterministic_non_tensor_batch_size:
+            if deterministic_tensor_batch_size:
+                assert deterministic_non_tensor_batch_size == tensor_batch_size
+            if final_batch_size:
+                assert final_batch_size == deterministic_non_tensor_batch_size
+            else:
+                final_batch_size = deterministic_non_tensor_batch_size
+
+    if not final_batch_size:
+        raise RuntimeError(f"Cannot correctly determine batch_size for input.")
+
+    if tensor_batch_size:
+        if tensor_batch_size != final_batch_size:
+            assert final_batch_size == 1
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch[k] = v.unsqueeze(0)
+                elif isinstance(v, np.ndarray):
+                    batch[k] = np.expand_dims(v, 0)
+
+
+    return TensorDict(batch, batch_size=[final_batch_size])

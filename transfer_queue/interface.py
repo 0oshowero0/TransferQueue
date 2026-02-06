@@ -21,8 +21,10 @@ import time
 from typing import Any, Optional
 
 import ray
+import torch
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
+from tensordict.tensorclass import NonTensorStack
 
 from transfer_queue.client import TransferQueueClient
 from transfer_queue.controller import TransferQueueController
@@ -684,53 +686,129 @@ def kv_clear(keys: list[str] | str) -> None:
     pass
 
 
-async def async_kv_put(key: str, field: Optional[TensorDict | dict[str, Any]], tags: Optional[dict[str, Any]]) -> None:
+async def async_kv_put(key: str, partition_id:str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
+
+    if fields is None and tag is None:
+        raise ValueError(f"Please provide at least one parameter of fields or tag.")
+
+
     tq_client = _maybe_create_transferqueue_client()
 
-    # 1. translate user-specified key to TQ BatchMeta
-    batch_meta = await tq_client.async_kv_create_keys(
-        keys=[key]
-    )  # 如果有，返回对应global index对应的batch_meta；如果没有，调用get_meta的insert模式新注册一个
+    # 1. translate user-specified key to BatchMeta
+    batch_meta = await tq_client.async_kv_retrieve_keys(
+        keys=[key], partition_id=partition_id, create=True
+    )
 
-    # 2. 将用户传入的tags写入batch_meta
+    # 2. register the user-specified tag to BatchMeta
+    if tag:
+        batch_meta.update_custom_meta([tag])
 
-    # 3. 调用原有put接口写入真实数据
+    # 3. put data
+    if fields:
+        if isinstance(fields, dict):
+            # TODO: consider whether to support this...
+            batch = {}
+            for key, value in fields.items():
+                if isinstance(value, torch.Tensor):
+                    if value.is_nested:
+                        raise ValueError("Please use (async)kv_batch_put for batch operation")
+                    batch[key] = value.unsqueeze(0)
+                else:
+                    batch[key] = NonTensorStack(value)
+            fields = TensorDict(batch, batch_size=[1])
+        elif not isinstance(fields, TensorDict):
+            raise ValueError(f"field can only be dict or TensorDict")
+
+        # custom_meta (tag) will be put to controller through the put process
+        await tq_client.async_put(fields, batch_meta)
+    else:
+        # directly update custom_meta (tag) to controller
+        await tq_client.async_set_custom_meta(batch_meta)
 
 
-async def async_kv_batch_put(keys: list[str], fields: TensorDict, tags: list[dict[str, Any]]) -> None:
+async def async_kv_batch_put(keys: list[str], partition_id:str, fields: TensorDict, tags: list[dict[str, Any]]) -> None:
     """
     Put to TransferQueue in key-value mode.
     """
-    pass
+    if fields is None and tags is None:
+        raise ValueError(f"Please provide at least one parameter of fields or tag.")
+
+    tq_client = _maybe_create_transferqueue_client()
+
+    # 1. translate user-specified key to BatchMeta
+    batch_meta = await tq_client.async_kv_retrieve_keys(
+        keys=keys, partition_id=partition_id, create=True
+    )
+
+    # 2. register the user-specified tags to BatchMeta
+    if tags:
+        if len(tags) != len(keys):
+            raise ValueError(f"keys with length {len(keys)} does not match length of tags {len(tags)}")
+        batch_meta.update_custom_meta(tags)
+
+    # 3. put data
+    if fields:
+        await tq_client.async_put(fields, batch_meta)
+    else:
+        # directly update custom_meta (tags) to controller
+        await tq_client.async_set_custom_meta(batch_meta)
+
 
 
 async def async_kv_get(
-    keys: list[str] | str, fields: Optional[list[str] | str] = None
-) -> tuple[TensorDict, list[dict[str, Any]]]:
+    keys: list[str] | str, partition_id:str, fields: Optional[list[str] | str] = None
+) -> TensorDict:
     """
     Get from TransferQueue in key-value mode.
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    batch_meta = await tq_client.async_kv_retrieve_keys(keys=[key])
+    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+
+    if fields:
+        if isinstance(fields, str):
+            fields = [fields]
+        batch_meta = batch_meta.select_fields(fields)
 
     data = await tq_client.async_get_data(batch_meta)
 
     return data
 
 
-async def async_kv_list(partition: str) -> list[str]:
+async def async_kv_list(partition_id: str) -> tuple[Optional[list[str]], Optional[list[dict[str, Any]]]]:
     """
     List all keys in TransferQueue speficied partition.
     """
     tq_client = _maybe_create_transferqueue_client()
 
+    keys = await tq_client.async_kv_list(partition_id)
 
-async def async_kv_clear(keys: list[str] | str) -> None:
+    if not keys:
+        return None, None
+
+    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+
+    custom_meta = batch_meta.get_all_custom_meta()
+    custom_meta = [custom_meta[i] for i in batch_meta.global_indexes]
+
+    return keys, custom_meta
+
+
+async def async_kv_clear(keys: list[str] | str, partition_id:str) -> None:
     """
     Clear from TransferQueue in key-value mode.
     """
-    pass
+
+    if isinstance(keys, str):
+        keys = [keys]
+
+    tq_client = _maybe_create_transferqueue_client()
+    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+
+    if batch_meta.size > 0:
+        await tq_client.async_clear_samples(batch_meta)
+
+

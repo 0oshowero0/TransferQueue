@@ -970,7 +970,7 @@ class AsyncTransferQueueClient:
         self,
         partition_id: Optional[str] = None,
         socket: Optional[zmq.asyncio.Socket] = None,
-    ) -> BatchMeta:
+    ) -> Optional[list[str]]:
         """Asynchronously retrieve keys from the controller for partition.
 
         Args:
