@@ -257,15 +257,15 @@ class TestKVList:
     def test_kv_list_empty_partition(self):
         """Test kv_list returns None when partition is empty."""
         mock_client = MagicMock()
-        mock_client.kv_list.return_value = [], []
+        mock_client.kv_list.return_value = []
 
         with patch("transfer_queue.interface._maybe_create_transferqueue_client", return_value=mock_client):
             from transfer_queue.interface import kv_list
 
             keys, custom_meta = kv_list(partition_id="empty_partition")
 
-        assert keys == []
-        assert custom_meta == []
+        assert keys is None
+        assert custom_meta is None
 
 
 class TestKVClear:
