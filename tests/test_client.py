@@ -144,6 +144,12 @@ class MockController:
                             "message": "Consumption reset successfully",
                         }
                         response_type = ZMQRequestType.RESET_CONSUMPTION_RESPONSE
+                    elif request_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS:
+                        response_body = self._mock_kv_retrieve_keys(request_msg.body)
+                        response_type = ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE
+                    elif request_msg.request_type == ZMQRequestType.KV_LIST:
+                        response_body = self._mock_kv_list(request_msg.body)
+                        response_type = ZMQRequestType.KV_LIST_RESPONSE
                     else:
                         response_body = {"error": f"Unknown request type: {request_msg.request_type}"}
                         response_type = ZMQRequestType.CLEAR_META_RESPONSE
@@ -186,6 +192,80 @@ class MockController:
         metadata = BatchMeta(samples=samples)
 
         return {"metadata": metadata}
+
+    def _mock_kv_retrieve_keys(self, request_body):
+        """Mock KV retrieve keys response."""
+        keys = request_body.get("keys", [])
+        create = request_body.get("create", False)
+        partition_id = request_body.get("partition_id", "")
+
+        # Initialize key tracking if not exists
+        if not hasattr(self, "_kv_partition_keys"):
+            self._kv_partition_keys = {}
+
+        # Generate global indexes for the keys
+        start_index = self._get_next_kv_index(partition_id)
+        global_indexes = list(range(start_index, start_index + len(keys)))
+
+        # Create metadata for each key
+        samples = []
+        for i, key in enumerate(keys):
+            field_meta = FieldMeta(
+                name="data",
+                dtype=torch.float32,
+                shape=torch.Size([1, 10]),
+                production_status=1,
+            )
+            sample = SampleMeta(
+                partition_id=partition_id,
+                global_index=global_indexes[i],
+                fields={"data": field_meta},
+            )
+            samples.append(sample)
+
+        metadata = BatchMeta(samples=samples)
+
+        # Store keys for this partition (only when create=True)
+        if create:
+            if partition_id not in self._kv_partition_keys:
+                self._kv_partition_keys[partition_id] = []
+            self._kv_partition_keys[partition_id].extend(keys)
+
+        # Update the next index for this partition
+        if global_indexes:
+            self._update_kv_index(partition_id, global_indexes[-1] + 1)
+
+        return {"metadata": metadata}
+
+    def _mock_kv_list(self, request_body):
+        """Mock KV list response."""
+        partition_id = request_body.get("partition_id", "")
+
+        # Initialize key tracking if not exists
+        if not hasattr(self, "_kv_partition_keys"):
+            self._kv_partition_keys = {}
+
+        # Return cached keys for this partition
+        keys = self._kv_partition_keys.get(partition_id, [])
+        return {"keys": keys}
+
+    def _get_next_kv_index(self, partition_id):
+        """Get next available index for KV keys in partition."""
+        if not hasattr(self, "_kv_index_map"):
+            self._kv_index_map = {}
+        if partition_id not in self._kv_index_map:
+            self._kv_index_map[partition_id] = 0
+            # Also initialize key tracking
+            if not hasattr(self, "_kv_partition_keys"):
+                self._kv_partition_keys = {}
+            self._kv_partition_keys[partition_id] = []
+        return self._kv_index_map[partition_id]
+
+    def _update_kv_index(self, partition_id, next_index):
+        """Update next available index for KV keys."""
+        if not hasattr(self, "_kv_index_map"):
+            self._kv_index_map = {}
+        self._kv_index_map[partition_id] = next_index
 
     def stop(self):
         self.running = False
@@ -836,7 +916,6 @@ async def test_sync_and_async_methods_mixed_usage(client_setup):
 # Custom Meta Interface Tests
 # =====================================================
 
-
 class TestClientCustomMetaInterface:
     """Tests for client custom_meta interface methods."""
 
@@ -850,12 +929,10 @@ class TestClientCustomMetaInterface:
         metadata = client.get_meta(data_fields=["input_ids"], batch_size=2, partition_id="0")
         # Set custom_meta on the metadata
         metadata.update_custom_meta(
-            {
                 [
                     {"input_ids": {"token_count": 100}},
                     {"input_ids": {"token_count": 120}},
                 ]
-            }
         )
 
         # Call set_custom_meta with metadata (BatchMeta)
@@ -871,14 +948,172 @@ class TestClientCustomMetaInterface:
         metadata = await client.async_get_meta(data_fields=["input_ids"], batch_size=2, partition_id="0")
         # Set custom_meta on the metadata
         metadata.update_custom_meta(
-            {
                 [
                     {"input_ids": {"token_count": 100}},
                     {"input_ids": {"token_count": 120}},
                 ]
-            }
         )
 
         # Call async_set_custom_meta with metadata (BatchMeta)
         await client.async_set_custom_meta(metadata)
         print("✓ async_set_custom_meta async method works")
+
+
+# =====================================================
+# KV Interface Tests
+# =====================================================
+
+
+class TestClientKVInterface:
+    """Tests for client KV interface methods."""
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_keys_single(self, client_setup):
+        """Test async_kv_retrieve_keys with single key."""
+        client, _, _ = client_setup
+
+        # Test async_kv_retrieve_keys with single key
+        metadata = await client.async_kv_retrieve_keys(
+            keys="test_key_1",
+            partition_id="test_partition",
+            create=True,
+        )
+
+        # Verify metadata structure
+        assert metadata is not None
+        assert hasattr(metadata, "global_indexes")
+        assert hasattr(metadata, "size")
+        assert metadata.size == 1
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_keys_multiple(self, client_setup):
+        """Test async_kv_retrieve_keys with multiple keys."""
+        client, _, _ = client_setup
+
+        # Test async_kv_retrieve_keys with multiple keys
+        keys = ["key_a", "key_b", "key_c"]
+        metadata = await client.async_kv_retrieve_keys(
+            keys=keys,
+            partition_id="test_partition",
+            create=True,
+        )
+
+        # Verify metadata structure
+        assert metadata is not None
+        assert hasattr(metadata, "global_indexes")
+        assert hasattr(metadata, "size")
+        assert metadata.size == 3
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_keys_create_false(self, client_setup):
+        """Test async_kv_retrieve_keys with create=False (retrieve existing keys)."""
+        client, _, _ = client_setup
+
+        # create some keys
+        await client.async_kv_retrieve_keys(
+            keys="existing_key",
+            partition_id="existing_partition",
+            create=True,
+        )
+
+        # Then retrieve them with create=False
+        metadata = await client.async_kv_retrieve_keys(
+            keys="existing_key",
+            partition_id="existing_partition",
+            create=False,
+        )
+
+        # Verify metadata structure
+        assert metadata is not None
+        assert metadata.size == 1
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_keys_invalid_keys_type(self, client_setup):
+        """Test async_kv_retrieve_keys raises error with invalid keys type."""
+        client, _, _ = client_setup
+
+        # Test with invalid keys type (not string or list)
+        with pytest.raises(TypeError):
+            await client.async_kv_retrieve_keys(
+                keys=123,  # Invalid type
+                partition_id="test_partition",
+                create=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_kv_list_empty_partition(self, client_setup):
+        """Test async_kv_list with empty partition."""
+        client, _, _ = client_setup
+
+        # Test async_kv_list with empty partition
+        keys = await client.async_kv_list(partition_id="empty_partition")
+
+        # Should return empty list for partition with no keys
+        assert keys == []
+
+    @pytest.mark.asyncio
+    async def test_async_kv_list_with_keys(self, client_setup):
+        """Test async_kv_list returns keys after they are registered."""
+        client, mock_controller, _ = client_setup
+
+        # First register some keys
+        await client.async_kv_retrieve_keys(
+            keys=["key_1", "key_2"],
+            partition_id="kv_partition",
+            create=True,
+        )
+
+        # Then list them
+        keys = await client.async_kv_list(partition_id="kv_partition")
+
+        # Verify keys are returned
+        assert keys is not None
+        assert len(keys) >= 2
+        assert "key_1" in keys
+        assert "key_2" in keys
+
+    @pytest.mark.asyncio
+    async def test_async_kv_list_multiple_partitions(self, client_setup):
+        """Test async_kv_list with multiple partitions."""
+        client, _, _ = client_setup
+
+        # Create keys in different partitions
+        await client.async_kv_retrieve_keys(
+            keys="partition_a_key",
+            partition_id="partition_a",
+            create=True,
+        )
+        await client.async_kv_retrieve_keys(
+            keys="partition_b_key",
+            partition_id="partition_b",
+            create=True,
+        )
+
+        # List keys for each partition
+        keys_a = await client.async_kv_list(partition_id="partition_a")
+        keys_b = await client.async_kv_list(partition_id="partition_b")
+
+        # Verify keys are isolated per partition
+        assert "partition_a_key" in keys_a
+        assert "partition_b_key" not in keys_a
+        assert "partition_b_key" in keys_b
+        assert "partition_a_key" not in keys_b
+
+    def test_kv_retrieve_keys_type_validation(self, client_setup):
+        """Test synchronous kv_retrieve_keys type validation."""
+        import asyncio
+
+        client, _, _ = client_setup
+
+        # Test with non-string element in list
+        async def test_invalid_list():
+            with pytest.raises(TypeError):
+                await client.async_kv_retrieve_keys(
+                    keys=["valid_key", 123],  # Invalid: 123 is not a string
+                    partition_id="test_partition",
+                    create=True,
+                )
+
+        asyncio.run(test_invalid_list())
+
+
