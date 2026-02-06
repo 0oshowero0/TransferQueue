@@ -916,6 +916,7 @@ async def test_sync_and_async_methods_mixed_usage(client_setup):
 # Custom Meta Interface Tests
 # =====================================================
 
+
 class TestClientCustomMetaInterface:
     """Tests for client custom_meta interface methods."""
 
@@ -929,10 +930,10 @@ class TestClientCustomMetaInterface:
         metadata = client.get_meta(data_fields=["input_ids"], batch_size=2, partition_id="0")
         # Set custom_meta on the metadata
         metadata.update_custom_meta(
-                [
-                    {"input_ids": {"token_count": 100}},
-                    {"input_ids": {"token_count": 120}},
-                ]
+            [
+                {"input_ids": {"token_count": 100}},
+                {"input_ids": {"token_count": 120}},
+            ]
         )
 
         # Call set_custom_meta with metadata (BatchMeta)
@@ -948,10 +949,10 @@ class TestClientCustomMetaInterface:
         metadata = await client.async_get_meta(data_fields=["input_ids"], batch_size=2, partition_id="0")
         # Set custom_meta on the metadata
         metadata.update_custom_meta(
-                [
-                    {"input_ids": {"token_count": 100}},
-                    {"input_ids": {"token_count": 120}},
-                ]
+            [
+                {"input_ids": {"token_count": 100}},
+                {"input_ids": {"token_count": 120}},
+            ]
         )
 
         # Call async_set_custom_meta with metadata (BatchMeta)
@@ -1115,5 +1116,3 @@ class TestClientKVInterface:
                 )
 
         asyncio.run(test_invalid_list())
-
-

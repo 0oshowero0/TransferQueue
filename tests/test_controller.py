@@ -776,9 +776,7 @@ class TestTransferQueueControllerKvInterface:
 
         # Retrieve keys with create=True - should create partition and keys
         keys = ["key_a", "key_b", "key_c"]
-        metadata = ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True)
-        )
+        metadata = ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True))
 
         # Verify partition was created
         partitions = ray.get(tq_controller.list_partitions.remote())
@@ -811,9 +809,7 @@ class TestTransferQueueControllerKvInterface:
 
         # First, create some keys
         keys = ["existing_key_1", "existing_key_2"]
-        ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True)
-        )
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True))
 
         # Retrieve the same keys again (should return existing)
         retrieved_metadata = ray.get(
@@ -834,16 +830,12 @@ class TestTransferQueueControllerKvInterface:
         partition_id = "kv_nonexistent_test"
 
         # Create partition first
-        ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=["initial_key"], partition_id=partition_id, create=True)
-        )
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=["initial_key"], partition_id=partition_id, create=True))
 
         # Try to retrieve non-existent key without create
         with pytest.raises(RuntimeError, match="were not found"):
             ray.get(
-                tq_controller.kv_retrieve_keys.remote(
-                    keys=["nonexistent_key"], partition_id=partition_id, create=False
-                )
+                tq_controller.kv_retrieve_keys.remote(keys=["nonexistent_key"], partition_id=partition_id, create=False)
             )
 
         print("✓ kv_retrieve_keys raises error for non-existent keys without create")
@@ -857,9 +849,7 @@ class TestTransferQueueControllerKvInterface:
         partition_id = "nonexistent_partition"
 
         with pytest.raises(RuntimeError, match="were not found"):
-            metadata = ray.get(
-                tq_controller.kv_retrieve_keys.remote(keys=["key_1"], partition_id=partition_id, create=False)
-            )
+            ray.get(tq_controller.kv_retrieve_keys.remote(keys=["key_1"], partition_id=partition_id, create=False))
 
         print("✓ kv_retrieve_keys raises error for non-existent partition_id without create")
 
@@ -870,20 +860,12 @@ class TestTransferQueueControllerKvInterface:
 
         # Create keys
         keys = ["sample_1", "sample_2", "sample_3"]
-        metadata = ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True)
-        )
+        metadata = ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True))
         global_indexes = metadata.global_indexes
 
         # Update production status
-        dtypes = {
-            idx: {"data": "torch.float32"}
-            for idx in global_indexes
-        }
-        shapes = {
-            idx: {"data": (64,)}
-            for idx in global_indexes
-        }
+        dtypes = {idx: {"data": "torch.float32"} for idx in global_indexes}
+        shapes = {idx: {"data": (64,)} for idx in global_indexes}
         success = ray.get(
             tq_controller.update_production_status.remote(
                 partition_id=partition_id,
@@ -919,9 +901,7 @@ class TestTransferQueueControllerKvInterface:
 
         # Create keys
         keys = ["key_1", "key_2"]
-        metadata = ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True)
-        )
+        metadata = ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True))
 
         # Set custom_meta
         custom_meta = {
@@ -956,16 +936,12 @@ class TestTransferQueueControllerKvInterface:
         # Create keys in partition 1
         partition_1 = "partition_kv_1"
         keys_1 = ["p1_key_a", "p1_key_b"]
-        ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=keys_1, partition_id=partition_1, create=True)
-        )
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys_1, partition_id=partition_1, create=True))
 
         # Create keys in partition 2
         partition_2 = "partition_kv_2"
         keys_2 = ["p2_key_x", "p2_key_y", "p2_key_z"]
-        ray.get(
-            tq_controller.kv_retrieve_keys.remote(keys=keys_2, partition_id=partition_2, create=True)
-        )
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys_2, partition_id=partition_2, create=True))
 
         # Verify partitions are isolated
         partition_1_snapshot = ray.get(tq_controller.get_partition_snapshot.remote(partition_1))

@@ -333,6 +333,7 @@ def test_put_data_with_custom_meta_from_storage_client(mock_notify, test_data_fo
 
     # Verify metadata was updated with custom_meta
     all_custom_meta = test_data_for_put_data["metadata"].get_all_custom_meta()
+    assert len(all_custom_meta) == 3
     assert all_custom_meta[0]["label"] == {"storage_key": "0@label"}
     assert all_custom_meta[2]["text"] == {"storage_key": "2@text"}
 

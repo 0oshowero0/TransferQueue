@@ -1000,4 +1000,3 @@ class TestDataPartitionStatusKvInterface:
         global_indexes = partition.kv_retrieve_keys(["key_1", "key_3"])
 
         assert global_indexes == [10, 30]
-

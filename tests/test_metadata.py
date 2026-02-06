@@ -864,7 +864,7 @@ class TestBatchMeta:
         batch.clear_custom_meta()
 
         result = batch.get_all_custom_meta()
-        assert result == {}
+        assert result == [{}, {}]
 
     def test_batch_meta_get_all_custom_meta_returns_deep_copy(self):
         """Test get_all_custom_meta returns a deep copy."""
@@ -901,7 +901,7 @@ class TestBatchMeta:
         batch = BatchMeta(samples=samples)
 
         result = batch.get_all_custom_meta()
-        assert result == {}
+        assert result == [{}]
 
     def test_batch_meta_custom_meta_with_nested_data(self):
         """Test custom_meta supports nested dictionary data."""

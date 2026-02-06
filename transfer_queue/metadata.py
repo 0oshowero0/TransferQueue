@@ -303,14 +303,15 @@ class BatchMeta:
         """
         self.extra_info.clear()
 
-    def get_all_custom_meta(self) -> dict[int, dict[str, Any]]:
+    def get_all_custom_meta(self) -> list[dict[str, Any]]:
         """
-        Get all custom_meta as a dictionary.
+        Get all custom_meta as a list of dictionary.
 
         Returns:
-            A deep copy of the custom_meta dictionary
+            A deep copy of the custom_meta list
         """
-        return copy.deepcopy(self.custom_meta)
+        custom_meta = [self.custom_meta.get(i, {}) for i in self.global_indexes]
+        return copy.deepcopy(custom_meta)
 
     def update_custom_meta(self, custom_meta: list[dict[str, Any]]):
         """

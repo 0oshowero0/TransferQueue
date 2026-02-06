@@ -738,7 +738,7 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
 
 def kv_list(partition_id: str) -> tuple[Optional[list[str]], Optional[list[dict[str, Any]]]]:
     """
-    List all keys in TransferQueue speficied partition.
+    List all keys in TransferQueue specified partition.
     """
     tq_client = _maybe_create_transferqueue_client()
 
@@ -750,7 +750,6 @@ def kv_list(partition_id: str) -> tuple[Optional[list[str]], Optional[list[dict[
     batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
 
     custom_meta = batch_meta.get_all_custom_meta()
-    custom_meta = [custom_meta[i] for i in batch_meta.global_indexes]
 
     return keys, custom_meta
 

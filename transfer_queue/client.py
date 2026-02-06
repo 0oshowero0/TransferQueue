@@ -292,7 +292,10 @@ class AsyncTransferQueueClient:
         partition_custom_meta: dict[str, dict[int, dict]] = {pid: {} for pid in set(metadata.partition_ids)}
 
         for meta in metadata_chunks:
-            partition_custom_meta[meta.partition_ids[0]].update(meta.get_all_custom_meta())
+            custom_meta = meta.get_all_custom_meta()
+            partition_custom_meta[meta.partition_ids[0]].update(
+                {meta.global_indexes[i]: custom_meta[i] for i in range(len(custom_meta))}
+            )
 
         request_msg = ZMQMessage.create(
             request_type=ZMQRequestType.SET_CUSTOM_META,
@@ -955,7 +958,7 @@ class AsyncTransferQueueClient:
             )
 
             if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE:
-                metadata = response_msg.body.get("metadata", None)
+                metadata = response_msg.body.get("metadata", BatchMeta.empty())
                 return metadata
             else:
                 raise RuntimeError(
@@ -1000,7 +1003,7 @@ class AsyncTransferQueueClient:
             )
 
             if response_msg.request_type == ZMQRequestType.KV_LIST_RESPONSE:
-                keys = response_msg.body.get("keys", None)
+                keys = response_msg.body.get("keys", [])
                 return keys
             else:
                 raise RuntimeError(

@@ -15,7 +15,6 @@
 
 import logging
 import os
-from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -129,7 +128,7 @@ def dict_to_tensordict(data: dict[str, Any]) -> TensorDict:
         elif isinstance(val, str):
             batch[key] = val
             deterministic_non_tensor_batch_size = 1
-        elif isinstance(val, Iterable):
+        elif isinstance(val, list):
             batch[key] = NonTensorStack(*val)
             deterministic_non_tensor_batch_size = len(val)
         else:
