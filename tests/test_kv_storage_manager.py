@@ -27,6 +27,7 @@ sys.path.append(str(parent_dir))
 
 from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
 from transfer_queue.storage.managers.base import KVStorageManager  # noqa: E402
+from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
 
 def get_meta(data, global_indexes=None):
@@ -41,7 +42,7 @@ def get_meta(data, global_indexes=None):
                 name=field_name,
                 dtype=tensor.dtype if isinstance(tensor, torch.Tensor) else None,
                 shape=tensor.shape if isinstance(tensor, torch.Tensor) else None,
-                production_status=1,
+                production_status=ProductionStatus.READY_FOR_CONSUME,
             )
             fields_dict[field_name] = field_meta
         sample = SampleMeta(

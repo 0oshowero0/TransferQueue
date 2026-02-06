@@ -34,7 +34,7 @@ from transfer_queue.metadata import (  # noqa: E402
     FieldMeta,
     SampleMeta,
 )
-from transfer_queue.utils.enum_utils import TransferQueueRole  # noqa: E402
+from transfer_queue.utils.enum_utils import ProductionStatus, TransferQueueRole  # noqa: E402
 from transfer_queue.utils.zmq_utils import (  # noqa: E402
     ZMQMessage,
     ZMQRequestType,
@@ -180,7 +180,7 @@ class MockController:
                     name=field_name,
                     dtype=None,
                     shape=None,
-                    production_status=0,
+                    production_status=ProductionStatus.NOT_PRODUCED,
                 )
                 fields.append(field_meta)
             sample = SampleMeta(
@@ -214,7 +214,7 @@ class MockController:
                 name="data",
                 dtype=torch.float32,
                 shape=torch.Size([1, 10]),
-                production_status=1,
+                production_status=ProductionStatus.READY_FOR_CONSUME,
             )
             sample = SampleMeta(
                 partition_id=partition_id,
