@@ -29,6 +29,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
 from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
+from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
 
 def create_batch_meta(global_indexes, fields_data):
@@ -41,11 +42,11 @@ def create_batch_meta(global_indexes, fields_data):
                 name=field_name,
                 dtype=tensor.dtype,
                 shape=tensor.shape,
-                production_status=1,
+                production_status=ProductionStatus.READY_FOR_CONSUME,
             )
             fields_dict[field_name] = field_meta
         sample = SampleMeta(
-            partition_id=0,
+            partition_id="test_partition",
             global_index=global_idx,
             fields=fields_dict,
         )
@@ -53,7 +54,7 @@ def create_batch_meta(global_indexes, fields_data):
     return BatchMeta(samples=samples)
 
 
-class TestKvPut:
+class TestKVPut:
     """Tests for kv_put function."""
 
     def test_kv_put_with_fields(self):
@@ -121,7 +122,7 @@ class TestKvPut:
         mock_client.put.assert_not_called()
         mock_client.set_custom_meta.assert_called_once_with(mock_batch_meta)
 
-    def test_kv_put_raises_error_without_fields_or_tag(self):
+    def test_kv_put_raises_error_without_fields_and_tag(self):
         """Test kv_put raises ValueError when neither fields nor tag provided."""
         mock_client = MagicMock()
 
@@ -132,7 +133,7 @@ class TestKvPut:
                 kv_put(key="test_key", partition_id="partition_1", fields=None, tag=None)
 
 
-class TestKvBatchPut:
+class TestKVBatchPut:
     """Tests for kv_batch_put function."""
 
     def test_kv_batch_put_success(self):
@@ -183,7 +184,7 @@ class TestKvBatchPut:
                 kv_batch_put(keys=keys, partition_id="partition_1", fields=batch_data, tags=tags)
 
 
-class TestKvGet:
+class TestKVGet:
     """Tests for kv_get function."""
 
     def test_kv_get_single_key(self):
@@ -233,7 +234,7 @@ class TestKvGet:
         mock_batch_meta.select_fields.assert_called_once_with(["text"])
 
 
-class TestKvList:
+class TestKVList:
     """Tests for kv_list function."""
 
     def test_kv_list_with_keys(self):
@@ -267,7 +268,7 @@ class TestKvList:
         assert custom_meta is None
 
 
-class TestKvClear:
+class TestKVClear:
     """Tests for kv_clear function."""
 
     def test_kv_clear_single_key(self):
@@ -305,7 +306,7 @@ class TestKvClear:
         mock_client.clear_samples.assert_called_once()
 
 
-class TestAsyncKvPut:
+class TestAsyncKVPut:
     """Tests for async_kv_put function."""
 
     def test_async_kv_put_with_fields(self):
@@ -351,7 +352,7 @@ class TestAsyncKvPut:
         mock_client.async_set_custom_meta.assert_called_once_with(mock_batch_meta)
 
 
-class TestAsyncKvBatchPut:
+class TestAsyncKVBatchPut:
     """Tests for async_kv_batch_put function."""
 
     def test_async_kv_batch_put_success(self):
@@ -383,7 +384,7 @@ class TestAsyncKvBatchPut:
         mock_client.async_put.assert_called_once()
 
 
-class TestAsyncKvGet:
+class TestAsyncKVGet:
     """Tests for async_kv_get function."""
 
     def test_async_kv_get_single_key(self):
@@ -405,7 +406,7 @@ class TestAsyncKvGet:
         mock_client.async_get_data.assert_called_once_with(mock_batch_meta)
 
 
-class TestAsyncKvList:
+class TestAsyncKVList:
     """Tests for async_kv_list function."""
 
     def test_async_kv_list_with_keys(self):
@@ -439,7 +440,7 @@ class TestAsyncKvList:
         assert custom_meta is None
 
 
-class TestAsyncKvClear:
+class TestAsyncKVClear:
     """Tests for async_kv_clear function."""
 
     def test_async_kv_clear_single_key(self):
@@ -477,7 +478,7 @@ class TestAsyncKvClear:
         mock_client.async_clear_samples.assert_called_once()
 
 
-class TestKvInterfaceDictConversion:
+class TestKVInterfaceDictConversion:
     """Tests for dict to TensorDict conversion in kv_put."""
 
     def test_kv_put_with_nontensor_value(self):
