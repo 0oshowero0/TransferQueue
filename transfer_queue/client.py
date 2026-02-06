@@ -924,12 +924,14 @@ class AsyncTransferQueueClient:
             metadata: BatchMeta of the corresponding keys
 
         Raises:
-            TypeError: If keys is not a list of string or a string
+            TypeError: If `keys` is not a list of string or a string
         """
 
         if isinstance(keys, str):
             keys = [keys]
         elif isinstance(keys, list):
+            if len(keys) < 1:
+                raise ValueError("Received an empty list as keys.")
             # validate all the elements are str
             if not all(isinstance(k, str) for k in keys):
                 raise TypeError("Not all element in `keys` are strings.")
@@ -973,7 +975,7 @@ class AsyncTransferQueueClient:
         self,
         partition_id: str,
         socket: Optional[zmq.asyncio.Socket] = None,
-    ) -> list[str]:
+    ) -> tuple[list[str], list[dict]]:
         """Asynchronously retrieve keys from the controller for partition.
 
         Args:
@@ -983,6 +985,9 @@ class AsyncTransferQueueClient:
         Returns:
             keys: list of keys in the partition
         """
+
+        if partition_id is None:
+            return [], []
 
         request_msg = ZMQMessage.create(
             request_type=ZMQRequestType.KV_LIST,
@@ -1004,7 +1009,8 @@ class AsyncTransferQueueClient:
 
             if response_msg.request_type == ZMQRequestType.KV_LIST_RESPONSE:
                 keys = response_msg.body.get("keys", [])
-                return keys
+                custom_meta = response_msg.body.get("custom_meta", [])
+                return keys, custom_meta
             else:
                 raise RuntimeError(
                     f"[{self.client_id}]: Failed to list keys from controller {self._controller.id}: "
@@ -1090,66 +1096,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         self._kv_retrieve_keys = _make_sync(self.async_kv_retrieve_keys)
         self._kv_list = _make_sync(self.async_kv_list)
 
-    def put(
-        self, data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None
-    ) -> BatchMeta:
-        """Synchronously write data to storage units based on metadata.
-
-        If metadata is not provided, it will be created automatically using insert mode
-        with the provided data fields and partition_id.
-
-        During put, the custom_meta in metadata will update the corresponding custom_meta in
-        TransferQueue Controller.
-
-        Note:
-            When using multiple workers for distributed execution, there may be data
-            ordering inconsistencies between workers during put operations.
-
-        Args:
-            data: Data to write as TensorDict
-            metadata: Records the metadata of a batch of data samples, containing index and
-                      storage unit information. If None, metadata will be auto-generated.
-            partition_id: Target data partition id (required if metadata is not provided)
-
-        Returns:
-            BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
-                       metadata; will be updated in a future version to reflect the post-put state)
-
-        Raises:
-            ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
-            RuntimeError: If storage operation fails
-
-        Example:
-            >>> batch_size = 4
-            >>> seq_len = 16
-            >>> current_partition_id = "train_0"
-            >>> # Example 1: Normal usage with existing metadata
-            >>> batch_meta = client.get_meta(
-            ...     data_fields=["prompts", "attention_mask"],
-            ...     batch_size=batch_size,
-            ...     partition_id=current_partition_id,
-            ...     mode="fetch",
-            ...     task_name="generate_sequences",
-            ... )
-            >>> batch = client.get_data(batch_meta)
-            >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
-            >>> client.put(data=output, metadata=batch_meta)
-            >>>
-            >>> # Example 2: Initial data insertion without pre-existing metadata
-            >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
-            >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
-            >>> # without metadata.
-            >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
-            >>> # interleave the initial data if n_sample > 1 before calling the async_put().
-            >>> original_prompts = torch.randn(batch_size, seq_len)
-            >>> n_samples = 4
-            >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
-            >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
-            >>> # This will create metadata in "insert" mode internally.
-            >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
-        """
-        return self._put(data=data, metadata=metadata, partition_id=partition_id)
-
+    # ==================== Basic API ====================
     def get_meta(
         self,
         data_fields: list[str],
@@ -1218,6 +1165,90 @@ class TransferQueueClient(AsyncTransferQueueClient):
             sampling_config=sampling_config,
         )
 
+    def set_custom_meta(self, metadata: BatchMeta) -> None:
+        """Synchronously send custom metadata to the controller.
+
+        This method sends per-sample custom metadata (custom_meta) to the controller.
+        The custom_meta is stored in the controller and can be retrieved along with
+        the BatchMeta in subsequent get_meta calls.
+
+        Args:
+            metadata: BatchMeta containing the samples and their custom metadata to store.
+                     The custom_meta should be set using BatchMeta.update_custom_meta() or
+                     BatchMeta.set_custom_meta() before calling this method.
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
+        Example:
+            >>> # Create batch with custom metadata
+            >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=4, ...)
+            >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
+            >>> client.set_custom_meta(batch_meta)
+        """
+
+        return self._set_custom_meta(metadata=metadata)
+
+    def put(
+        self, data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None
+    ) -> BatchMeta:
+        """Synchronously write data to storage units based on metadata.
+
+        If metadata is not provided, it will be created automatically using insert mode
+        with the provided data fields and partition_id.
+
+        During put, the custom_meta in metadata will update the corresponding custom_meta in
+        TransferQueue Controller.
+
+        Note:
+            When using multiple workers for distributed execution, there may be data
+            ordering inconsistencies between workers during put operations.
+
+        Args:
+            data: Data to write as TensorDict
+            metadata: Records the metadata of a batch of data samples, containing index and
+                      storage unit information. If None, metadata will be auto-generated.
+            partition_id: Target data partition id (required if metadata is not provided)
+
+        Returns:
+            BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
+                       metadata; will be updated in a future version to reflect the post-put state)
+
+        Raises:
+            ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
+            RuntimeError: If storage operation fails
+
+        Example:
+            >>> batch_size = 4
+            >>> seq_len = 16
+            >>> current_partition_id = "train_0"
+            >>> # Example 1: Normal usage with existing metadata
+            >>> batch_meta = client.get_meta(
+            ...     data_fields=["prompts", "attention_mask"],
+            ...     batch_size=batch_size,
+            ...     partition_id=current_partition_id,
+            ...     mode="fetch",
+            ...     task_name="generate_sequences",
+            ... )
+            >>> batch = client.get_data(batch_meta)
+            >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
+            >>> client.put(data=output, metadata=batch_meta)
+            >>>
+            >>> # Example 2: Initial data insertion without pre-existing metadata
+            >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
+            >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
+            >>> # without metadata.
+            >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
+            >>> # interleave the initial data if n_sample > 1 before calling the async_put().
+            >>> original_prompts = torch.randn(batch_size, seq_len)
+            >>> n_samples = 4
+            >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
+            >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
+            >>> # This will create metadata in "insert" mode internally.
+            >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
+        """
+        return self._put(data=data, metadata=metadata, partition_id=partition_id)
+
     def get_data(self, metadata: BatchMeta) -> TensorDict:
         """Synchronously fetch data from storage units and organize into TensorDict.
 
@@ -1264,29 +1295,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
         return self._clear_samples(metadata=metadata)
 
-    def check_consumption_status(self, task_name: str, partition_id: str) -> bool:
-        """Synchronously check if all samples for a partition have been consumed by a specific task.
-
-        Args:
-            task_name: Name of the task to check consumption for
-            partition_id: Partition id to check consumption status for
-
-        Returns:
-            bool: True if all samples have been consumed by the task, False otherwise
-
-        Raises:
-            RuntimeError: If communication fails or controller returns error response
-
-        Example:
-            >>> # Check if all samples have been consumed
-            >>> is_consumed = client.check_consumption_status(
-            ...     task_name="generate_sequences",
-            ...     partition_id="train_0"
-            ... )
-            >>> print(f"All samples consumed: {is_consumed}")
-        """
-        return self._check_consumption_status(task_name=task_name, partition_id=partition_id)
-
+    # ==================== Status Query API ====================
     def get_consumption_status(
         self,
         task_name: str,
@@ -1311,6 +1320,29 @@ class TransferQueueClient(AsyncTransferQueueClient):
             >>> print(f"Global index: {global_index}, Consumption status: {consumption_status}")
         """
         return self._get_consumption_status(task_name, partition_id)
+
+    def check_consumption_status(self, task_name: str, partition_id: str) -> bool:
+        """Synchronously check if all samples for a partition have been consumed by a specific task.
+
+        Args:
+            task_name: Name of the task to check consumption for
+            partition_id: Partition id to check consumption status for
+
+        Returns:
+            bool: True if all samples have been consumed by the task, False otherwise
+
+        Raises:
+            RuntimeError: If communication fails or controller returns error response
+
+        Example:
+            >>> # Check if all samples have been consumed
+            >>> is_consumed = client.check_consumption_status(
+            ...     task_name="generate_sequences",
+            ...     partition_id="train_0"
+            ... )
+            >>> print(f"All samples consumed: {is_consumed}")
+        """
+        return self._check_consumption_status(task_name=task_name, partition_id=partition_id)
 
     def reset_consumption(self, partition_id: str, task_name: Optional[str] = None) -> bool:
         """Synchronously reset consumption status for a partition.
@@ -1379,30 +1411,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         """
         return self._get_partition_list()
 
-    def set_custom_meta(self, metadata: BatchMeta) -> None:
-        """Synchronously send custom metadata to the controller.
-
-        This method sends per-sample custom metadata (custom_meta) to the controller.
-        The custom_meta is stored in the controller and can be retrieved along with
-        the BatchMeta in subsequent get_meta calls.
-
-        Args:
-            metadata: BatchMeta containing the samples and their custom metadata to store.
-                     The custom_meta should be set using BatchMeta.update_custom_meta() or
-                     BatchMeta.set_custom_meta() before calling this method.
-
-        Raises:
-            RuntimeError: If communication fails or controller returns error response
-
-        Example:
-            >>> # Create batch with custom metadata
-            >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=4, ...)
-            >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
-            >>> client.set_custom_meta(batch_meta)
-        """
-
-        return self._set_custom_meta(metadata=metadata)
-
+    # ==================== KV Interface API ====================
     def kv_retrieve_keys(
         self,
         keys: list[str] | str,
@@ -1418,6 +1427,9 @@ class TransferQueueClient(AsyncTransferQueueClient):
 
         Returns:
             metadata: BatchMeta of the corresponding keys
+
+        Raises:
+            TypeError: If `keys` is not a list of string or a string
         """
 
         return self._kv_retrieve_keys(keys=keys, partition_id=partition_id, create=create)
@@ -1425,7 +1437,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
     def kv_list(
         self,
         partition_id: str,
-    ) -> list[str]:
+    ) -> tuple[list[Optional[str]], list[Optional[dict]]]:
         """Synchronously retrieve keys from the controller for partition.
 
         Args:

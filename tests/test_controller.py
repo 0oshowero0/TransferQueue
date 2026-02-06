@@ -833,12 +833,12 @@ class TestTransferQueueControllerKvInterface:
         ray.get(tq_controller.kv_retrieve_keys.remote(keys=["initial_key"], partition_id=partition_id, create=True))
 
         # Try to retrieve non-existent key without create
-        with pytest.raises(RuntimeError, match="were not found"):
-            ray.get(
-                tq_controller.kv_retrieve_keys.remote(keys=["nonexistent_key"], partition_id=partition_id, create=False)
-            )
+        batch_meta = ray.get(
+            tq_controller.kv_retrieve_keys.remote(keys=["nonexistent_key"], partition_id=partition_id, create=False)
+        )
+        assert batch_meta.size == 0
 
-        print("✓ kv_retrieve_keys raises error for non-existent keys without create")
+        print("✓ kv_retrieve_keys return an empty BatchMeta for non-existent keys without create")
 
         # Clean up
         ray.get(tq_controller.clear_partition.remote(partition_id))
@@ -848,10 +848,12 @@ class TestTransferQueueControllerKvInterface:
         tq_controller = TransferQueueController.remote()
         partition_id = "nonexistent_partition"
 
-        with pytest.raises(RuntimeError, match="were not found"):
-            ray.get(tq_controller.kv_retrieve_keys.remote(keys=["key_1"], partition_id=partition_id, create=False))
+        batch_meta = ray.get(
+            tq_controller.kv_retrieve_keys.remote(keys=["key_1"], partition_id=partition_id, create=False)
+        )
+        assert batch_meta.size == 0
 
-        print("✓ kv_retrieve_keys raises error for non-existent partition_id without create")
+        print("✓ kv_retrieve_keys return an empty BatchMeta for non-existent partition_id without create")
 
     def test_controller_kv_retrieve_keys_with_production_status(self, ray_setup):
         """Test kv_retrieve_keys works with production status update."""

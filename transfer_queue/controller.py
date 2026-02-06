@@ -1371,7 +1371,8 @@ class TransferQueueController:
 
         partition = self._get_partition(partition_id)
         if not partition:
-            raise ValueError(f"Partition {partition_id} not found")
+            logger.warning(f"Try to clear an non-existent partition {partition_id}!")
+            return
 
         global_indexes_range = list(self.index_manager.get_indexes_for_partition(partition_id))
         partition.clear_data(global_indexes_range, clear_consumption)
@@ -1388,13 +1389,13 @@ class TransferQueueController:
         Args:
             partition_id: ID of the partition to reset consumption for
             task_name: Name of the task to reset. If None, resets all tasks.
-        Raises:
-            ValueError: If partition not found
+
         """
         logger.debug(f"[{self.controller_id}]: Resetting consumption for partition {partition_id}, task={task_name}")
         partition = self._get_partition(partition_id)
         if not partition:
-            raise ValueError(f"Partition {partition_id} not found")
+            logger.warning(f"Try to reset consumption of an non-existent partition {partition_id}!")
+            return
         partition.reset_consumption(task_name)
 
     def clear_meta(
@@ -1470,7 +1471,8 @@ class TransferQueueController:
 
         if partition is None:
             if not create:
-                raise RuntimeError(f"Partition {partition_id} were not found in controller!")
+                logger.warning(f"Partition {partition_id} were not found in controller!")
+                return BatchMeta.empty()
             else:
                 self.create_partition(partition_id)
                 partition = self._get_partition(partition_id)
@@ -1481,9 +1483,8 @@ class TransferQueueController:
         none_indexes = [idx for idx, value in enumerate(global_indexes) if value is None]
         if len(none_indexes) > 0:
             if not create:
-                raise RuntimeError(
-                    f"Keys {[keys[i] for i in none_indexes]} were not found in partition {partition_id}!"
-                )
+                logger.warning(f"Keys {[keys[i] for i in none_indexes]} were not found in partition {partition_id}!")
+                return BatchMeta.empty()
             else:
                 # create non-exist keys
                 batch_global_indexes = partition.activate_pre_allocated_indexes(len(none_indexes))
@@ -1826,17 +1827,19 @@ class TransferQueueController:
                     partition = self._get_partition(partition_id)
                     if not partition:
                         keys = []
+                        custom_meta = []
                         message = f"Partition {partition_id} not found for kv_list."
                         logger.debug(f"[{self.controller_id}]: {message}")
                     else:
                         keys = list(partition.keys_mapping.keys())
+                        custom_meta = [partition.custom_meta.get(partition.keys_mapping[k], {}) for k in keys]
                         message = "Success"
 
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.KV_LIST_RESPONSE,
                         sender_id=self.controller_id,
                         receiver_id=request_msg.sender_id,
-                        body={"keys": keys, message: message},
+                        body={"keys": keys, "custom_meta": custom_meta, message: message},
                     )
 
             self.request_handle_socket.send_multipart([identity, *response_msg.serialize()])

@@ -247,7 +247,7 @@ class MockController:
 
         # Return cached keys for this partition
         keys = self._kv_partition_keys.get(partition_id, [])
-        return {"keys": keys}
+        return {"keys": keys, "custom_meta": [{} for _ in range(len(keys))]}
 
     def _get_next_kv_index(self, partition_id):
         """Get next available index for KV keys in partition."""
@@ -1047,10 +1047,11 @@ class TestClientKVInterface:
         client, _, _ = client_setup
 
         # Test async_kv_list with empty partition
-        keys = await client.async_kv_list(partition_id="empty_partition")
+        keys, custom_meta = await client.async_kv_list(partition_id="empty_partition")
 
         # Should return empty list for partition with no keys
         assert keys == []
+        assert custom_meta == []
 
     @pytest.mark.asyncio
     async def test_async_kv_list_with_keys(self, client_setup):
@@ -1065,13 +1066,14 @@ class TestClientKVInterface:
         )
 
         # Then list them
-        keys = await client.async_kv_list(partition_id="kv_partition")
+        keys, custom_meta = await client.async_kv_list(partition_id="kv_partition")
 
         # Verify keys are returned
         assert keys is not None
         assert len(keys) >= 2
         assert "key_1" in keys
         assert "key_2" in keys
+        assert custom_meta == [{}, {}]
 
     @pytest.mark.asyncio
     async def test_async_kv_list_multiple_partitions(self, client_setup):
@@ -1091,14 +1093,16 @@ class TestClientKVInterface:
         )
 
         # List keys for each partition
-        keys_a = await client.async_kv_list(partition_id="partition_a")
-        keys_b = await client.async_kv_list(partition_id="partition_b")
+        keys_a, custom_meta_a = await client.async_kv_list(partition_id="partition_a")
+        keys_b, custom_meta_b = await client.async_kv_list(partition_id="partition_b")
 
         # Verify keys are isolated per partition
         assert "partition_a_key" in keys_a
         assert "partition_b_key" not in keys_a
         assert "partition_b_key" in keys_b
         assert "partition_a_key" not in keys_b
+        assert custom_meta_a == [{}]
+        assert custom_meta_b == [{}]
 
     def test_kv_retrieve_keys_type_validation(self, client_setup):
         """Test synchronous kv_retrieve_keys type validation."""

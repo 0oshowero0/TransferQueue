@@ -726,6 +726,9 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
 
     batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
 
+    if batch_meta.size == 0:
+        raise RuntimeError("keys or partition were not found!")
+
     if fields is not None:
         if isinstance(fields, str):
             fields = [fields]
@@ -736,20 +739,13 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
     return data
 
 
-def kv_list(partition_id: str) -> tuple[Optional[list[str]], Optional[list[dict[str, Any]]]]:
+def kv_list(partition_id: str) -> tuple[list[Optional[str]], list[Optional[dict[str, Any]]]]:
     """
     List all keys in TransferQueue specified partition.
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    keys = tq_client.kv_list(partition_id)
-
-    if not keys:
-        return None, None
-
-    batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
-
-    custom_meta = batch_meta.get_all_custom_meta()
+    keys, custom_meta = tq_client.kv_list(partition_id)
 
     return keys, custom_meta
 
@@ -859,21 +855,13 @@ async def async_kv_get(
     return data
 
 
-async def async_kv_list(partition_id: str) -> tuple[Optional[list[str]], Optional[list[dict[str, Any]]]]:
+async def async_kv_list(partition_id: str) -> tuple[list[str], list[dict[str, Any]]]:
     """
-    List all keys in TransferQueue speficied partition.
+    List all keys in TransferQueue specified partition.
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    keys = await tq_client.async_kv_list(partition_id)
-
-    if not keys:
-        return None, None
-
-    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
-
-    custom_meta = batch_meta.get_all_custom_meta()
-    custom_meta = [custom_meta[i] for i in batch_meta.global_indexes]
+    keys, custom_meta = await tq_client.async_kv_list(partition_id)
 
     return keys, custom_meta
 
