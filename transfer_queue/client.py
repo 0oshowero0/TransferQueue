@@ -905,6 +905,7 @@ class AsyncTransferQueueClient:
     async def async_kv_retrieve_keys(
         self,
         keys: list[str] | str,
+        partition_id: str,
         create: bool = False,
         socket: Optional[zmq.asyncio.Socket] = None,
     ) -> BatchMeta:
@@ -912,15 +913,25 @@ class AsyncTransferQueueClient:
 
         Args:
             keys: List of keys to retrieve from the controller
+            partition_id: Partition id to retrieve from the controller
             create: Whether to register new keys if not found.
             socket: ZMQ socket (injected by decorator)
 
         Returns:
             metadata: BatchMeta of the corresponding keys
+
+        Raises:
+            TypeError: If keys is not a list of string or a string
         """
 
         if isinstance(keys, str):
             keys = [keys]
+        elif isinstance(keys, list):
+            # validate all the elements are str
+            if not all(isinstance(k, str) for k in keys):
+                raise TypeError("Not all element in `keys` are strings.")
+        else:
+            raise TypeError("Only string or list of strings are allowed as `keys`.")
 
         request_msg = ZMQMessage.create(
             request_type=ZMQRequestType.KV_RETRIEVE_KEYS,
@@ -928,6 +939,7 @@ class AsyncTransferQueueClient:
             receiver_id=self._controller.id,
             body={
                 "keys": keys,
+                "partition_id": partition_id,
                 "create": create,
             },
         )
@@ -1394,19 +1406,21 @@ class TransferQueueClient(AsyncTransferQueueClient):
     def kv_retrieve_keys(
         self,
         keys: list[str] | str,
+        partition_id: str,
         create: bool = False,
     ) -> BatchMeta:
         """Synchronously retrieve BatchMeta from the controller using user-specified keys.
 
         Args:
             keys: List of keys to retrieve from the controller
+            partition_id: Partition id to retrieve from the controller
             create: Whether to register new keys if not found.
 
         Returns:
             metadata: BatchMeta of the corresponding keys
         """
 
-        return self._kv_retrieve_keys(keys=keys, create=create)
+        return self._kv_retrieve_keys(keys=keys, partition_id=partition_id, create=create)
 
     def kv_list(
         self,

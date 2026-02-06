@@ -214,7 +214,7 @@ class DataPartitionStatus:
     # Each tensor tracks which samples have been consumed by that task
     consumption_status: dict[str, Tensor] = field(default_factory=dict)
 
-    # Sample metadata
+    # Global indexes
     global_indexes: set[int] = field(
         default_factory=set
     )  # set of global indexes that have been added to this partition
@@ -232,6 +232,9 @@ class DataPartitionStatus:
     )  # global_idx -> {field: custom_backend_meta}
     # User-defined metadata that may not apply to field level
     custom_meta: dict[int, dict[str, Any]] = field(default_factory=dict)  # global_idx -> {}
+
+    # User-defined Keys
+    keys_mapping: dict[str, int] = field(default_factory=dict)  # key -> global_idx
 
     # Threading lock for concurrency control; only for preventing mask operation error when expanding production_status.
     # No need to strictly lock for every read/write operation since freshness is not critical.
@@ -832,6 +835,11 @@ class DataPartitionStatus:
                 f"Attempted to clear global_indexes: {indexes_to_release}"
             )
 
+    def kv_retrieve_keys(self, keys: list[str]) -> list[int]:
+        """Translate the user-specified keys to global_indexes"""
+        global_indexes = [self.keys_mapping.get(k, None) for k in keys]
+        return global_indexes
+
 
 @ray.remote(num_cpus=1)
 class TransferQueueController:
@@ -981,6 +989,8 @@ class TransferQueueController:
         Returns:
             List of indexes allocated to the partition
         """
+        # Note: This includes the pre-allocated global_indexes for the partition.
+        # i.e., partition.global_indexes + partition.pre_allocated_global_indexes
         return self.index_manager.get_indexes_for_partition(partition)
 
     # ==================== Data Production API ====================
@@ -1160,9 +1170,10 @@ class TransferQueueController:
                     )
                     batch_global_indexes.extend(new_global_indexes)
 
+                # register global_indexes in partition
+                partition.global_indexes.update(batch_global_indexes)
+
             else:
-                # TODO: separate this "clear" related logic into a separated mode
-                # clear metadata call passes empty data_fields
                 batch_global_indexes = self.index_manager.get_indexes_for_partition(partition_id)
             return self.generate_batch_meta(partition_id, batch_global_indexes, data_fields, mode)
 
@@ -1314,7 +1325,7 @@ class TransferQueueController:
                         and partition.production_status is not None
                         and partition.production_status[global_index, field_index] == 1
                     ):
-                        production_status = ProductionStatus.NOT_PRODUCED
+                        production_status = ProductionStatus.READY_FOR_CONSUME
                         dtype = partition.get_field_dtype(global_index, field_name)
                         shape = partition.get_field_shape(global_index, field_name)
                     else:
@@ -1431,6 +1442,69 @@ class TransferQueueController:
 
             # Release the specific indexes from index manager
             self.index_manager.release_indexes(partition_id, global_indexes_to_clear)
+
+    def kv_retrieve_keys(
+        self,
+        keys: list[str],
+        partition_id: str,
+        create: bool = False,
+    ) -> BatchMeta:
+        """
+        Retrieve BatchMeta from the controller using a list of keys.
+
+        Args:
+            keys: List of keys to retrieve from the controller
+            partition_id: Partition id to retrieve from the controller
+            create: Whether to register new keys if not found.
+
+        Returns:
+            metadata: BatchMeta of the requested keys
+        """
+
+        logger.debug(
+            f"[{self.controller_id}]: Retrieve keys {keys} in partition {partition_id}"
+        )
+
+        if partition_id not in self.partitions:
+            if not create:
+                logger.warning(f"Partition {partition_id} not found in controller for kv_retrieve_keys, "
+                               f"return empty BatchMeta")
+                return BatchMeta.empty()
+            else:
+                self.create_partition(partition_id)
+
+        partition = self._get_partition(partition_id)
+
+        global_indexes = partition.kv_retrieve_keys(keys)
+
+        none_indexes = [idx for idx, value in enumerate(global_indexes) if value is None]
+        if len(none_indexes) > 0:
+            if not create:
+                raise RuntimeError(f"Keys {[keys[i] for i in none_indexes]} were not found "
+                                   f"in partition {partition_id}!")
+            else:
+                # create non-exist keys
+                batch_global_indexes = partition.activate_pre_allocated_indexes(len(none_indexes))
+
+                if len(batch_global_indexes) < len(none_indexes):
+                    new_global_indexes = self.index_manager.allocate_indexes(
+                        partition_id, count=(len(none_indexes) - len(batch_global_indexes))
+                    )
+                    batch_global_indexes.extend(new_global_indexes)
+
+                # register global_indexes in partition
+                partition.global_indexes.update(batch_global_indexes)
+
+                # register key-global_indexes mapping in partition
+                for i in range(len(none_indexes)):
+                    global_indexes[none_indexes[i]] = batch_global_indexes[i]
+                    partition.keys_mapping.update({keys[none_indexes[i]]:batch_global_indexes[i]})
+
+        data_fields = partition.field_name_mapping.keys()
+
+        metadata = self.generate_batch_meta(partition_id, global_indexes, data_fields, mode='force_fetch')
+
+        return metadata
 
     def _init_zmq_socket(self):
         """Initialize ZMQ sockets for communication."""
@@ -1725,6 +1799,39 @@ class TransferQueueController:
                         sender_id=self.controller_id,
                         receiver_id=request_msg.sender_id,
                         body={"partition_ids": partition_ids},
+                    )
+
+            elif request_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS:
+                with perf_monitor.measure(op_type="KV_RETRIEVE_KEYS"):
+                    keys = params["keys"]
+                    partition_id = params["partition_id"]
+                    create = params["create"]
+
+                    metadata = self.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=create)
+                    response_msg = ZMQMessage.create(
+                        request_type=ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE,
+                        sender_id=self.controller_id,
+                        receiver_id=request_msg.sender_id,
+                        body={"metadata": metadata},
+                    )
+
+            elif request_msg.request_type == ZMQRequestType.KV_LIST:
+                with perf_monitor.measure(op_type="KV_LIST"):
+                    partition_id = params["partition_id"]
+                    partition = self._get_partition(partition_id)
+                    if not partition:
+                        keys = []
+                        message = f"Partition {partition_id} not found for kv_list."
+                        logger.debug(f"[{self.controller_id}]: {message}")
+                    else:
+                        keys = partition.keys_mapping.keys()
+                        message = f"Success"
+
+                    response_msg = ZMQMessage.create(
+                        request_type=ZMQRequestType.KV_LIST_RESPONSE,
+                        sender_id=self.controller_id,
+                        receiver_id=request_msg.sender_id,
+                        body={"keys": keys, message: message},
                     )
 
             self.request_handle_socket.send_multipart([identity, *response_msg.serialize()])
