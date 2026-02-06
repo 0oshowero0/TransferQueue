@@ -898,31 +898,39 @@ def kv_clear(keys: list[str] | str, partition_id: str) -> None:
 
 
 # ==================== KV Interface API ====================
-
-
 async def async_kv_put(
     key: str, partition_id: str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]
 ) -> None:
     """Asynchronously put a single key-value pair to TransferQueue.
 
-    See kv_put for detailed documentation.
+    This is a convenience method for putting data using a user-specified key
+    instead of BatchMeta. Internally, the key is translated to a BatchMeta
+    and the data is stored using the regular put mechanism.
 
     Args:
-        key: User-specified key for the data
-        partition_id: Partition to store the data in
-        fields: Data fields to store
+        key: User-specified key for the data sample (in row)
+        partition_id: Logical partition to store the data in
+        fields: Data fields to store. Can be a TensorDict or a dict of tensors.
+                Each key in `fields` will be treated as a column for the data sample.
+                If dict is provided, tensors will be unsqueezed to add batch dimension.
         tag: Optional metadata tag to associate with the key
+
+    Raises:
+        ValueError: If neither fields nor tag is provided
+        ValueError: If nested tensors are provided (use kv_batch_put instead)
+        RuntimeError: If retrieved BatchMeta size doesn't match length of `keys`
 
     Example:
         >>> import transfer_queue as tq
         >>> import torch
         >>> tq.init()
+        >>> # Put with both fields and tag
         >>> await tq.async_kv_put(
         ...     key="sample_1",
         ...     partition_id="train",
         ...     fields={"input_ids": torch.tensor([1, 2, 3])},
         ...     tag={"score": 0.95}
-        ... )
+        ... ))
     """
 
     if fields is None and tag is None:
@@ -932,6 +940,9 @@ async def async_kv_put(
 
     # 1. translate user-specified key to BatchMeta
     batch_meta = await tq_client.async_kv_retrieve_keys(keys=[key], partition_id=partition_id, create=True)
+
+    if batch_meta.size != 1:
+        raise RuntimeError(f"Retrieved BatchMeta size {batch_meta.size} does not match with input `key` size of 1!")
 
     # 2. register the user-specified tag to BatchMeta
     if tag:
@@ -965,13 +976,19 @@ async def async_kv_batch_put(
 ) -> None:
     """Asynchronously put multiple key-value pairs to TransferQueue in batch.
 
-    See kv_batch_put for detailed documentation.
+    This method stores multiple key-value pairs in a single operation, which is more
+    efficient than calling kv_put multiple times.
 
     Args:
         keys: List of user-specified keys for the data
-        partition_id: Partition to store the data in
-        fields: TensorDict containing data for all keys
+        partition_id: Logical partition to store the data in
+        fields: TensorDict containing data for all keys. Must have batch_size == len(keys)
         tags: List of metadata tags, one for each key
+
+    Raises:
+        ValueError: If neither `fields` nor `tags` is provided
+        ValueError: If length of `keys` doesn't match length of `tags` or the batch_size of `fields` TensorDict
+        RuntimeError: If retrieved BatchMeta size doesn't match length of `keys`
 
     Example:
         >>> import transfer_queue as tq
@@ -979,17 +996,30 @@ async def async_kv_batch_put(
         >>> keys = ["sample_1", "sample_2", "sample_3"]
         >>> fields = TensorDict({
         ...     "input_ids": torch.randn(3, 10),
+        ...     "attention_mask": torch.ones(3, 10),
         ... }, batch_size=3)
         >>> tags = [{"score": 0.9}, {"score": 0.85}, {"score": 0.95}]
         >>> await tq.async_kv_batch_put(keys=keys, partition_id="train", fields=fields, tags=tags)
     """
+
     if fields is None and tags is None:
         raise ValueError("Please provide at least one parameter of fields or tag.")
+
+    if fields.batch_size[0] != len(keys):
+        raise ValueError(
+            f"`keys` with length {len(keys)} does not match the `fields` TensorDict with "
+            f"batch_size {fields.batch_size[0]}"
+        )
 
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
     batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=True)
+
+    if batch_meta.size != len(keys):
+        raise RuntimeError(
+            f"Retrieved BatchMeta size {batch_meta.size} does not match with input `keys` size {len(keys)}!"
+        )
 
     # 2. register the user-specified tags to BatchMeta
     if tags:
@@ -1010,27 +1040,37 @@ async def async_kv_get(
 ) -> TensorDict:
     """Asynchronously get data from TransferQueue using user-specified keys.
 
-    See kv_get for detailed documentation.
+    This is a convenience method for retrieving data using keys instead of indexes.
 
     Args:
         keys: Single key or list of keys to retrieve
         partition_id: Partition containing the keys
-        fields: Optional field(s) to retrieve
+        fields: Optional field(s) to retrieve. If None, retrieves all fields
 
     Returns:
         TensorDict with the requested data
 
+    Raises:
+        RuntimeError: If keys or partition are not found
+
     Example:
         >>> import transfer_queue as tq
         >>> tq.init()
+        >>> # Get single key with all fields
+        >>> data = await tq.async_kv_get(key="sample_1", partition_id="train")
+        >>> # Get multiple keys with specific fields
         >>> data = await tq.async_kv_get(
         ...     keys=["sample_1", "sample_2"],
-        ...     partition_id="train"
+        ...     partition_id="train",
+        ...     fields="input_ids"
         ... )
     """
     tq_client = _maybe_create_transferqueue_client()
 
     batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+
+    if batch_meta.size == 0:
+        raise RuntimeError("keys or partition were not found!")
 
     if fields is not None:
         if isinstance(fields, str):
@@ -1045,18 +1085,20 @@ async def async_kv_get(
 async def async_kv_list(partition_id: str) -> tuple[list[str], list[dict[str, Any]]]:
     """Asynchronously list all keys and their metadata in a partition.
 
-    See kv_list for detailed documentation.
-
     Args:
         partition_id: Partition to list keys from
 
     Returns:
-        Tuple of (keys list, tags list)
+        Tuple of:
+        - List of keys in the partition
+        - List of custom metadata (tags) associated with each key
 
     Example:
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> keys, tags = await tq.async_kv_list(partition_id="train")
+        >>> print(f"Keys: {keys}")
+        >>> print(f"Tags: {tags}")
     """
     tq_client = _maybe_create_transferqueue_client()
 
@@ -1068,7 +1110,8 @@ async def async_kv_list(partition_id: str) -> tuple[list[str], list[dict[str, An
 async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
     """Asynchronously clear key-value pairs from TransferQueue.
 
-    See kv_clear for detailed documentation.
+    This removes the specified keys and their associated data from both
+    the controller and storage units.
 
     Args:
         keys: Single key or list of keys to clear
@@ -1077,6 +1120,9 @@ async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
     Example:
         >>> import transfer_queue as tq
         >>> tq.init()
+        >>> # Clear single key
+        >>> await tq.async_kv_clear(key="sample_1", partition_id="train")
+        >>> # Clear multiple keys
         >>> await tq.async_kv_clear(keys=["sample_1", "sample_2"], partition_id="train")
     """
 
