@@ -968,9 +968,9 @@ class AsyncTransferQueueClient:
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_kv_list(
         self,
-        partition_id: Optional[str] = None,
+        partition_id: str,
         socket: Optional[zmq.asyncio.Socket] = None,
-    ) -> Optional[list[str]]:
+    ) -> list[str]:
         """Asynchronously retrieve keys from the controller for partition.
 
         Args:
@@ -1424,8 +1424,8 @@ class TransferQueueClient(AsyncTransferQueueClient):
 
     def kv_list(
         self,
-        partition_id: Optional[str] = None,
-    ) -> BatchMeta:
+        partition_id: str,
+    ) -> list[str]:
         """Synchronously retrieve keys from the controller for partition.
 
         Args:

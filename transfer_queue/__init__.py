@@ -33,6 +33,17 @@ from .interface import (
     init,
     put,
     set_custom_meta,
+    async_kv_put,
+    async_kv_batch_put,
+    async_kv_get,
+    async_kv_list,
+    async_kv_clear,
+    kv_put,
+    kv_batch_put,
+    kv_get,
+    kv_list,
+    kv_clear
+
 )
 from .metadata import BatchMeta
 from .sampler import BaseSampler
@@ -58,6 +69,16 @@ __all__ = [
     "async_clear_samples",
     "async_clear_partition",
     "close",
+    "kv_put",
+    "kv_batch_put",
+    "kv_get",
+    "kv_list",
+    "kv_clear",
+    "async_kv_put",
+    "async_kv_batch_put",
+    "async_kv_get",
+    "async_kv_list",
+    "async_kv_clear",
 ] + [
     "TransferQueueClient",
     "StreamingDataset",
