@@ -18,23 +18,19 @@ import logging
 import os
 import threading
 from functools import wraps
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
-import ray
 import torch
 import zmq
 import zmq.asyncio
 from tensordict import TensorDict
 from torch import Tensor
 
-from transfer_queue.controller import TransferQueueController
 from transfer_queue.metadata import (
     BatchMeta,
 )
 from transfer_queue.storage import (
-    SimpleStorageUnit,
-    TransferQueueStorageManager,
     TransferQueueStorageManagerFactory,
 )
 from transfer_queue.utils.common import limit_pytorch_auto_parallel_threads
@@ -95,11 +91,12 @@ class AsyncTransferQueueClient:
                           AsyncSimpleStorageManager, KVStorageManager (under development), etc.
             config: Configuration dictionary for the storage manager.
                     For AsyncSimpleStorageManager, must contain the following required keys:
-                    - controller_info: ZMQ server information about the controller
-                    - storage_unit_infos: ZMQ server information about the storage units
+                    - zmq_info: ZMQ server information about the storage units
 
         """
-        self.storage_manager = TransferQueueStorageManagerFactory.create(manager_type, config)
+        self.storage_manager = TransferQueueStorageManagerFactory.create(
+            manager_type, controller_info=self._controller, config=config
+        )
 
     # TODO (TQStorage): Provide a general dynamic socket function for both Client & Storage @huazhong.
     @staticmethod
@@ -1041,6 +1038,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         data_fields: list[str],
         batch_size: int,
         partition_id: str,
+        mode: str = "fetch",
         task_name: Optional[str] = None,
         sampling_config: Optional[dict[str, Any]] = None,
     ) -> BatchMeta:
@@ -1098,6 +1096,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
             data_fields=data_fields,
             batch_size=batch_size,
             partition_id=partition_id,
+            mode=mode,
             task_name=task_name,
             sampling_config=sampling_config,
         )
@@ -1304,36 +1303,3 @@ class TransferQueueClient(AsyncTransferQueueClient):
                 logger.warning(f"[{self.client_id}]: Error closing event loop: {e}")
 
         super().close()
-
-
-def process_zmq_server_info(
-    handlers: dict[Any, Union["TransferQueueController", "TransferQueueStorageManager", "SimpleStorageUnit"]]
-    | Union["TransferQueueController", "TransferQueueStorageManager", "SimpleStorageUnit"],
-):  # noqa: UP007
-    """Extract ZMQ server information from handler objects.
-
-    Args:
-        handlers: Dictionary of handler objects (controllers, storage managers, or storage units),
-                  or a single handler object
-
-    Returns:
-        If handlers is a dictionary: Dictionary mapping handler names to their ZMQ server information
-        If handlers is a single object: ZMQ server information for that object
-
-    Examples:
-        >>> # Single handler
-        >>> controller = TransferQueueController.remote(...)
-        >>> info = process_zmq_server_info(controller)
-        >>>
-        >>> # Multiple handlers
-        >>> handlers = {"storage_0": storage_0, "storage_1": storage_1}
-        >>> info_dict = process_zmq_server_info(handlers)"""
-    # Handle single handler object case
-    if not isinstance(handlers, dict):
-        return ray.get(handlers.get_zmq_server_info.remote())  # type: ignore[union-attr, attr-defined]
-    else:
-        # Handle dictionary case
-        server_info = {}
-        for name, handler in handlers.items():
-            server_info[name] = ray.get(handler.get_zmq_server_info.remote())  # type: ignore[union-attr, attr-defined]
-        return server_info

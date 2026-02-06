@@ -17,8 +17,10 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Callable, Iterator
+import warnings
+from typing import Callable, Iterator
 
+from omegaconf import DictConfig
 from tensordict import TensorDict
 from torch.utils.data import IterableDataset
 
@@ -68,7 +70,7 @@ class StreamingDataset(IterableDataset):
 
     def __init__(
         self,
-        config: dict[str, Any],
+        config: DictConfig,
         batch_size: int,
         micro_batch_size: int,
         data_fields: list[str],
@@ -82,8 +84,8 @@ class StreamingDataset(IterableDataset):
 
         Args:
             config: Configuration dictionary containing:
-                - controller_info: ZMQServerInfo for the TransferQueueController
-                - storage_backend: Storage backend type (e.g., "AsyncSimpleStorageManager")
+                - controller.controller_info: ZMQServerInfo for the TransferQueueController
+                - backend.storage_backend: Storage backend type (e.g., "SimpleStorage")
                 - Other backend-specific configuration
             batch_size: Batch size for data loading per iter.
             micro_batch_size: Number of samples per micro-batch. This is the batch size
@@ -156,16 +158,44 @@ class StreamingDataset(IterableDataset):
             ValueError: If controller_info or storage_backend is missing or invalid.
         """
         client_id = uuid.uuid4().hex[:8]
-        controller_info = self.config.get("controller_info", None)
-        if not controller_info or not isinstance(controller_info, ZMQServerInfo):
-            raise ValueError("Invalid or missing controller_info in config")
 
-        storage_backend = self.config.get("storage_backend", None)
+        # TODO: DEPRECATE in future
+        controller_config = self.config.get("controller", None)
+        if controller_config:
+            controller_info = controller_config.get("zmq_info", None)
+        else:
+            controller_info = self.config.get("controller_info", None)
+            if controller_info:
+                warnings.warn(
+                    "Config entry `controller_info` will be deprecated in 0.1.7, please "
+                    "use `controller.zmq_info` instead.",
+                    category=DeprecationWarning,
+                    stacklevel=2,
+                )
+
+        if not controller_info or not isinstance(controller_info, ZMQServerInfo):
+            raise ValueError("Invalid or missing controller.zmq_info in config")
+
+        backend_config = self.config.get("backend", None)
+        if not backend_config:
+            storage_backend = self.config.get("storage_backend", None)
+            backend_config = self.config
+            if storage_backend:
+                warnings.warn(
+                    "Config entry `storage_backend` will be deprecated in 0.1.7, please "
+                    "use `backend.storage_backend` instead.",
+                    category=DeprecationWarning,
+                    stacklevel=2,
+                )
+        else:
+            storage_backend = backend_config.get("storage_backend", None)
+            backend_config = self.config.backend[storage_backend]
+
         if not storage_backend:
             raise ValueError("Missing storage_backend in config")
 
         self._tq_client = TransferQueueClient(client_id, controller_info)
-        self._tq_client.initialize_storage_manager(manager_type=storage_backend, config=self.config)
+        self._tq_client.initialize_storage_manager(manager_type=storage_backend, config=backend_config)
 
     def __iter__(self) -> Iterator[tuple[TensorDict, BatchMeta]]:
         """Iterate over the dataset, yielding batches of data.

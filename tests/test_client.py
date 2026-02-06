@@ -318,9 +318,9 @@ def client_setup(mock_controller, mock_storage):
     ):
         config = {
             "controller_info": mock_controller.zmq_server_info,
-            "storage_unit_infos": {mock_storage.storage_id: mock_storage.zmq_server_info},
+            "zmq_info": {mock_storage.storage_id: mock_storage.zmq_server_info},
         }
-        client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=config)
+        client.initialize_storage_manager(manager_type="SimpleStorage", config=config)
 
         # Mock all storage manager methods to avoid real ZMQ operations
         async def mock_put_data(data, metadata):
@@ -411,9 +411,9 @@ def test_single_controller_multiple_storages():
         ):
             config = {
                 "controller_info": controller.zmq_server_info,
-                "storage_unit_infos": {s.storage_id: s.zmq_server_info for s in storages},
+                "zmq_info": {s.storage_id: s.zmq_server_info for s in storages},
             }
-            client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=config)
+            client.initialize_storage_manager(manager_type="SimpleStorage", config=config)
 
             # Mock all storage manager methods to avoid real ZMQ operations
             async def mock_put_data(data, metadata):

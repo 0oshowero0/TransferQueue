@@ -28,6 +28,7 @@ from uuid import uuid4
 import ray
 import torch
 import zmq
+from omegaconf import DictConfig
 from tensordict import NonTensorStack, TensorDict
 from torch import Tensor
 
@@ -59,12 +60,10 @@ class TransferQueueStorageManager(ABC):
     """Base class for storage layer. It defines the interface for data operations and
     generally provides handshake & notification capabilities."""
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, controller_info: ZMQServerInfo, config: DictConfig):
         self.storage_manager_id = f"TQ_STORAGE_{uuid4().hex[:8]}"
         self.config = config
-        controller_info = config.get("controller_info")
-        assert controller_info is not None, "controller_info is required"
-        self.controller_info: ZMQServerInfo = controller_info
+        self.controller_info = controller_info
 
         self.data_status_update_socket: Optional[zmq.Socket[bytes]] = None
         self.controller_handshake_socket: Optional[zmq.Socket[bytes]] = None
@@ -351,14 +350,14 @@ class KVStorageManager(TransferQueueStorageManager):
     It maps structured metadata (BatchMeta) to flat lists of keys and values for efficient KV operations.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, controller_info: ZMQServerInfo, config: dict[str, Any]):
         """
         Initialize the KVStorageManager with configuration.
         """
         client_name = config.get("client_name", None)
         if client_name is None:
             raise ValueError("Missing client_name in config")
-        super().__init__(config)
+        super().__init__(controller_info, config)
         self.storage_client = StorageClientFactory.create(client_name, config)
         self._multi_threads_executor: Optional[ThreadPoolExecutor] = None
         # Register a cleanup function: automatically invoke shutdown when the instance is garbage collected.

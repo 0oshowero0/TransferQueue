@@ -23,6 +23,7 @@ from typing import Any, Optional, TypeAlias
 from uuid import uuid4
 
 import psutil
+import ray
 import zmq
 
 from transfer_queue.utils.common import (
@@ -239,3 +240,35 @@ def create_zmq_socket(
     if identity is not None:
         socket.setsockopt(zmq.IDENTITY, identity)
     return socket
+
+
+def process_zmq_server_info(
+    handlers: dict[Any, Any] | Any,
+):  # noqa: UP007
+    """Extract ZMQ server information from handler objects.
+
+    Args:
+        handlers: Dictionary of handler objects (controllers, storage managers, or storage units),
+                  or a single handler object
+
+    Returns:
+        If handlers is a dictionary: Dictionary mapping handler names to their ZMQ server information
+        If handlers is a single object: ZMQ server information for that object
+
+    Examples:
+        >>> # Single handler
+        >>> controller = TransferQueueController.remote(...)
+        >>> info = process_zmq_server_info(controller)
+        >>>
+        >>> # Multiple handlers
+        >>> handlers = {"storage_0": storage_0, "storage_1": storage_1}
+        >>> info_dict = process_zmq_server_info(handlers)"""
+    # Handle single handler object case
+    if not isinstance(handlers, dict):
+        return ray.get(handlers.get_zmq_server_info.remote())  # type: ignore[union-attr, attr-defined]
+    else:
+        # Handle dictionary case
+        server_info = {}
+        for name, handler in handlers.items():
+            server_info[name] = ray.get(handler.get_zmq_server_info.remote())  # type: ignore[union-attr, attr-defined]
+        return server_info
