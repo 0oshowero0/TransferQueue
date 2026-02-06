@@ -126,5 +126,6 @@ yuanrong = [
 # This is the rough equivalent of package_data={'': ['version/*']}
 [tool.setuptools.package-data]
 transfer_queue = [
-  "version/*",
+    "version/*",
+    "*.yaml"
 ]

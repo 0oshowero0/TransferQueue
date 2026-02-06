@@ -38,19 +38,13 @@ warnings.filterwarnings(
 
 import ray  # noqa: E402
 import torch  # noqa: E402
-from omegaconf import OmegaConf  # noqa: E402
 from tensordict import TensorDict  # noqa: E402
 
 # Add the parent directory to the path
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
-from transfer_queue import (  # noqa: E402
-    SimpleStorageUnit,
-    TransferQueueClient,
-    TransferQueueController,
-    process_zmq_server_info,
-)
+import transfer_queue as tq  # noqa: E402
 from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
 from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
@@ -211,10 +205,12 @@ def demonstrate_batch_meta():
     print(f"✓ Extra info: {batch.get_all_extra_info()}")
 
     print("[Example 3] Adding sample-level information through custom_meta...")
-    batch.set_custom_meta(
-        global_index=0, meta_dict={"uid": "prompt@0", "session_id": "session@0", "model_version": "epoch@0"}
+    batch.update_custom_meta(
+        [
+            {"uid": "prompt@0", "session_id": "session@0", "model_version": "epoch@0"},
+            {"uid": "prompt@1", "session_id": "session@0", "model_version": "epoch@0"},
+        ]
     )
-    batch.update_custom_meta({1: {"uid": "prompt@1", "session_id": "session@0", "model_version": "epoch@0"}})
     print(f"✓ Custom meta: {batch.get_all_custom_meta()}")
 
     # Example 4: Chunk a batch
@@ -308,32 +304,8 @@ def demonstrate_real_workflow():
     if not ray.is_initialized():
         ray.init()
 
-    # Setup TransferQueue
-    config = OmegaConf.create(
-        {
-            "num_data_storage_units": 2,
-        }
-    )
-
-    storage_units = {}
-    for i in range(config["num_data_storage_units"]):
-        storage_units[i] = SimpleStorageUnit.remote(storage_unit_size=100)
-
-    controller = TransferQueueController.remote()
-    controller_info = process_zmq_server_info(controller)
-    storage_unit_infos = process_zmq_server_info(storage_units)
-
-    client = TransferQueueClient(
-        client_id="TutorialClient",
-        controller_info=controller_info,
-    )
-
-    tq_config = OmegaConf.create({}, flags={"allow_objects": True})
-    tq_config.controller_info = controller_info
-    tq_config.storage_unit_infos = storage_unit_infos
-    config = OmegaConf.merge(tq_config, config)
-
-    client.initialize_storage_manager(manager_type="AsyncSimpleStorageManager", config=config)
+    # Initialize TransferQueue
+    tq.init()
 
     print("[Step 1] Putting data into TransferQueue...")
     input_ids = torch.randint(0, 1000, (8, 512))
@@ -348,23 +320,23 @@ def demonstrate_real_workflow():
     )
 
     partition_id = "demo_partition"
-    batch_meta = client.put(data=data_batch, partition_id=partition_id)
+    batch_meta = tq.put(data=data_batch, partition_id=partition_id)
     print(f"✓ Put {data_batch.batch_size[0]} samples into partition '{partition_id}', got BatchMeta back {batch_meta}.")
 
     print("[Step 2] [Optional] Setting sample-level custom_meta...")
 
-    custom_meta = {
-        global_index: {"uid": uuid.uuid4().hex[:4], "session_id": uuid.uuid4().hex[:4], "model_version": 0}
-        for global_index in batch_meta.global_indexes
-    }
+    custom_meta = [
+        {"uid": uuid.uuid4().hex[:4], "session_id": uuid.uuid4().hex[:4], "model_version": 0}
+        for _ in range(batch_meta.size)
+    ]
     batch_meta.update_custom_meta(custom_meta)
     print(f"✓ Set custom_meta into BatchMeta: {batch_meta.get_all_custom_meta()}")
 
-    client.set_custom_meta(batch_meta)
+    tq.set_custom_meta(batch_meta)
     print("✓ Successful to store custom_meta into TQ controller. Now you can retrieve the custom_meta from anywhere.")
 
     print("[Step 3] Try to get metadata from TransferQueue from other places...")
-    batch_meta = client.get_meta(
+    batch_meta = tq.get_meta(
         data_fields=["input_ids", "attention_mask"],
         batch_size=8,
         partition_id=partition_id,
@@ -383,7 +355,7 @@ def demonstrate_real_workflow():
     print("✓ Selected 'input_ids' field only:")
     print(f"  New field names: {selected_meta.field_names}")
     print(f"  Samples still have same global indexes: {selected_meta.global_indexes}")
-    retrieved_data = client.get_data(selected_meta)
+    retrieved_data = tq.get_data(selected_meta)
     print(f"  Retrieved data keys: {list(retrieved_data.keys())}")
 
     print("[Step 5] Select specific samples from the retrieved BatchMeta...")
@@ -391,7 +363,7 @@ def demonstrate_real_workflow():
     print("✓ Selected samples at indices [0, 2, 4, 6]:")
     print(f"  New global indexes: {partial_meta.global_indexes}")
     print(f"  Number of samples: {len(partial_meta)}")
-    retrieved_data = client.get_data(partial_meta)
+    retrieved_data = tq.get_data(partial_meta)
     print(f"  Retrieved data samples: {retrieved_data}, all the data samples: {data_batch}")
 
     print("[Step 6] Demonstrate chunk operation...")
@@ -399,12 +371,12 @@ def demonstrate_real_workflow():
     print(f"✓ Chunked into {len(chunks)} parts:")
     for i, chunk in enumerate(chunks):
         print(f"  Chunk {i}: {len(chunk)} samples, indexes={chunk.global_indexes}")
-        chunk_data = client.get_data(chunk)
+        chunk_data = tq.get_data(chunk)
         print(f"  Chunk {i}: Retrieved chunk data: {chunk_data}")
 
     # Cleanup
-    client.clear_partition(partition_id=partition_id)
-    client.close()
+    tq.clear_partition(partition_id=partition_id)
+    tq.close()
     ray.shutdown()
     print("✓ Partition cleared and resources cleaned up")
 
