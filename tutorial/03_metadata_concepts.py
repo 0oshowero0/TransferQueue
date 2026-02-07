@@ -305,7 +305,7 @@ def demonstrate_real_workflow():
 
     # Initialize Ray
     if not ray.is_initialized():
-        ray.init()
+        ray.init(namespace="TransferQueueTutorial")
 
     # Initialize TransferQueue
     tq.init()
