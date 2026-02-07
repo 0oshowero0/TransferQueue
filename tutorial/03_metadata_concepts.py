@@ -209,6 +209,9 @@ def demonstrate_batch_meta():
         [
             {"uid": "prompt@0", "session_id": "session@0", "model_version": "epoch@0"},
             {"uid": "prompt@1", "session_id": "session@0", "model_version": "epoch@0"},
+            {"uid": "prompt@2", "session_id": "session@0", "model_version": "epoch@0"},
+            {"uid": "prompt@3", "session_id": "session@0", "model_version": "epoch@0"},
+            {"uid": "prompt@4", "session_id": "session@0", "model_version": "epoch@0"},
         ]
     )
     print(f"✓ Custom meta: {batch.get_all_custom_meta()}")
