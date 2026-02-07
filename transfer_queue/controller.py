@@ -829,8 +829,10 @@ class DataPartitionStatus:
                 self.field_shapes.pop(idx, None)
                 self.field_custom_backend_meta.pop(idx, None)
                 self.custom_meta.pop(idx, None)
-                self.keys_mapping.pop(self.revert_keys_mapping[idx], None)
-                self.revert_keys_mapping.pop(idx, None)
+
+                if idx in self.revert_keys_mapping:
+                    self.keys_mapping.pop(self.revert_keys_mapping[idx], None)
+                    self.revert_keys_mapping.pop(idx, None)
 
         except Exception as e:
             logger.error(
@@ -1816,9 +1818,6 @@ class TransferQueueController:
                     keys = params["keys"]
                     partition_id = params["partition_id"]
                     create = params["create"]
-
-                    print("+++++++++++TQDEBUG+++++++++++++++++")
-                    print(params)
 
                     metadata = self.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=create)
                     response_msg = ZMQMessage.create(
