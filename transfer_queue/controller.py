@@ -1504,6 +1504,9 @@ class TransferQueueController:
                     partition.keys_mapping[keys[none_indexes[i]]] = batch_global_indexes[i]
                     partition.revert_keys_mapping[batch_global_indexes[i]] = keys[none_indexes[i]]
 
+                with partition.data_status_lock:
+                    partition.ensure_samples_capacity(max(batch_global_indexes) + 1)
+
         verified_global_indexes = [idx for idx in global_indexes if idx is not None]
         assert len(verified_global_indexes) == len(keys)
 
@@ -1809,9 +1812,13 @@ class TransferQueueController:
 
             elif request_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS:
                 with perf_monitor.measure(op_type="KV_RETRIEVE_KEYS"):
+                    params = request_msg.body
                     keys = params["keys"]
                     partition_id = params["partition_id"]
                     create = params["create"]
+
+                    print("+++++++++++TQDEBUG+++++++++++++++++")
+                    print(params)
 
                     metadata = self.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=create)
                     response_msg = ZMQMessage.create(
@@ -1823,6 +1830,7 @@ class TransferQueueController:
 
             elif request_msg.request_type == ZMQRequestType.KV_LIST:
                 with perf_monitor.measure(op_type="KV_LIST"):
+                    params = request_msg.body
                     partition_id = params["partition_id"]
                     partition = self._get_partition(partition_id)
                     if not partition:
@@ -1839,7 +1847,7 @@ class TransferQueueController:
                         request_type=ZMQRequestType.KV_LIST_RESPONSE,
                         sender_id=self.controller_id,
                         receiver_id=request_msg.sender_id,
-                        body={"keys": keys, "custom_meta": custom_meta, message: message},
+                        body={"keys": keys, "custom_meta": custom_meta, "message": message},
                     )
 
             self.request_handle_socket.send_multipart([identity, *response_msg.serialize()])
