@@ -36,4 +36,11 @@ jobs:
     - name: Run tutorials
       run: |
         export TQ_NUM_THREADS=2
-        for file in tutorial/*.py; do python3 "$file"; done
+        export RAY_DEDUP_LOGS=0
+        ray stop --force || true
+        for file in tutorial/*.py; do
+          echo "================ Running $file ================"
+          python3 "$file"
+          ray stop --force
+          sleep 5
+        done
