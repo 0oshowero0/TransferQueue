@@ -319,6 +319,8 @@ def main():
     print("\n[Phase 2] Starting data generation...")
     generate_worker_handlers = start_all_generate_actors()
 
+    time.sleep(10)
+
     # Step 3: Launch data consumption actors
     print("\n[Phase 3] Starting data consumption...")
     update_worker_handlers = start_all_update_actors()
