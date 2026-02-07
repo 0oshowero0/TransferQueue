@@ -540,8 +540,6 @@ class DataPartitionStatus:
                 self.consumption_status[task_name] = torch.zeros(0, dtype=torch.int8)
 
         # Get consumption status for requested task
-        consumption_status = self.consumption_status[task_name]
-
         partition_global_index = torch.tensor(
             sorted(self.global_indexes | self.pre_allocated_global_indexes), dtype=torch.long
         )
@@ -549,8 +547,9 @@ class DataPartitionStatus:
         if mask:
             with self.data_status_lock:
                 self.ensure_samples_capacity(max(partition_global_index) + 1)
-            consumption_status = consumption_status[partition_global_index]
-
+            consumption_status = self.consumption_status[task_name][partition_global_index]
+        else:
+            consumption_status = self.consumption_status[task_name]
         return partition_global_index, consumption_status
 
     def reset_consumption(self, task_name: Optional[str] = None):
