@@ -37,4 +37,4 @@ jobs:
       run: |
         export TQ_NUM_THREADS=2
         export RAY_DEDUP_LOGS=0
-        python tutorial/06_streaming_dataloader.py
+        for file in tutorial/*.py; do python3 "$file"; done
