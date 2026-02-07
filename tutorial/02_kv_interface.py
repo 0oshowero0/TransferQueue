@@ -56,15 +56,16 @@ if not ray.is_initialized():
 def demonstrate_kv_api():
     """
     Demonstrate the Key-Value (KV) semantic API:
-    kv_put & kv_batch_put -> kv_get -> kv_list -> kv_clear
+    kv_put & kv_batch_put -> kv_list -> kv_get -> kv_clear
     """
     print("=" * 80)
-    print("Key-Value Semantic API Demo: kv_put → kv_get → kv_list → kv_clear")
+    print("Key-Value Semantic API Demo: kv_put/kv_batch_put → kv_list → kv_get → kv_clear")
     print("=" * 80)
 
     # Step 1: Put a single key-value pair with kv_put
     print("[Step 1] Putting a single sample with kv_put...")
 
+    # Define the data content (The "Value")
     input_ids = torch.tensor([[1, 2, 3]])
     attention_mask = torch.ones(input_ids.size())
 
@@ -77,14 +78,16 @@ def demonstrate_kv_api():
     )
 
     partition_id = "Train"
+    # Use a meaningful string key instead of an auto-increment integer
     key = "0_0"  # User-defined key: "{uid}_{session_id}"
     tag = {"global_steps": 0, "status": "running", "model_version": 0}
 
-    print(f"  Created single sample with key: {key}, fields: {list(single_sample.keys())}, and tag: {tag}")
-    print("  Note: kv_put accepts a user-defined string key instead of auto-generated index")
+    print(f"  Inserting Key: {key}")
+    print(f"  Fields (Columns): {list(single_sample.keys())}")
+    print(f"  Tag (Metadata): {tag}")
 
     tq.kv_put(key=key, partition_id=partition_id, fields=single_sample, tag=tag)
-    print(f"  ✓ kv_put: key='{key}', tag={tag}")
+    print("  ✓ kv_put success.")
 
     # Step 2: Put multiple key-value pairs with kv_batch_put
     print("\n[Step 2] Putting batch data with kv_batch_put...")
@@ -110,13 +113,14 @@ def demonstrate_kv_api():
     keys = ["1_0", "1_1", "1_2", "2_0"]  # 4 keys for 4 samples
     tags = [{"global_steps": 1, "status": "running", "model_version": 1} for _ in range(len(keys))]
 
-    print(f"  Created batch with {data_batch.batch_size[0]} samples")
-    print(f"  Batch keys: {keys}")
+    print(f"  Inserting batch of {len(keys)} samples.")
+    print(f"  Fields (Columns): {list(data_batch.keys())}")
+    print(f"  Tag (Metadata): {tags}")
     tq.kv_batch_put(keys=keys, partition_id=partition_id, fields=data_batch, tags=tags)
-    print(f"  ✓ kv_batch_put: {len(keys)} samples written to partition '{partition_id}'")
+    print("  ✓ kv_batch_put success.")
 
     # Step 3: Append additional fields to existing samples
-    print("\n[Step 3] Appending new fields to existing samples...")
+    print("\n[Step 3] Appending new fields (Columns) to existing samples...")
 
     batch_response = torch.tensor(
         [
@@ -131,25 +135,38 @@ def demonstrate_kv_api():
         batch_size=batch_response.size(0),
     )
 
+    # We only update subset of keys
     append_keys = ["1_1", "2_0"]  # Appending to existing samples
     append_tags = [{"global_steps": 1, "status": "finish", "model_version": 1} for _ in range(len(append_keys))]
-    print(f"  Adding 'response' field to keys: {append_keys}")
+    print(f"  Target Keys: {append_keys}")
+    print("  New Field to Add is: 'response'")
+    print(f"  The updated tags are: {append_tags}")
     tq.kv_batch_put(keys=append_keys, partition_id=partition_id, fields=response_batch, tags=append_tags)
-    print("  ✓ Field appended successfully (sample now has input_ids, attention_mask, and response)")
+    print("  ✓ Update success: Samples '1_1' and '2_0' now contain {input_ids, attention_mask, response}.")
 
-    # Step 4: List all keys and tags in a partition
-    print("\n[Step 4] Listing all keys and tags in partition...")
+    # Step 4: Only update tags through kv_put
+    print("\n[Step 4] Update existing tags without providing value...")
+    key = "0_0"
+    tag = {"global_steps": 0, "status": "finish", "model_version": 0}
+    print(f"  Target Key: {key}")
+    print(f"  The updated tag is: {tag}")
+    tq.kv_put(key=key, partition_id=partition_id, fields=None, tag=tag)
+    print(f"  ✓ Update success: Samples '0_0' now has tag as {tag}.")
+
+    # Step 5: List all keys and tags in a partition
+    print("\n[Step 5] Listing all keys and tags in partition...")
+
     all_keys, all_tags = tq.kv_list(partition_id=partition_id)
     print(f"  Found {len(all_keys)} keys in partition '{partition_id}':")
     for k, t in zip(all_keys, all_tags, strict=False):
-        print(f"    - key='{k}', tag={t}")
+        print(f"    - key='{k}' | tag={t}")
 
-    # Step 5: Retrieve specific fields using kv_get
-    print("\n[Step 5] Retrieving specific fields with kv_get...")
+    # Step 6: Retrieve specific fields using kv_get
+    print("\n[Step 6] Retrieving specific fields (Column) with kv_get...")
+    print("  Fetching only 'input_ids' to save bandwidth (ignoring 'attention_mask' and 'response').")
+
     retrieved_input_ids = tq.kv_get(keys=all_keys, partition_id=partition_id, fields="input_ids")
-    print(f"  Retrieved 'input_ids' field for all {len(all_keys)} samples:")
-    print(f"    Shape: {retrieved_input_ids.batch_size}")
-    print(f"    Values: {retrieved_input_ids['input_ids']}")
+    print(f"  ✓ Successfully retrieved only {list(retrieved_input_ids.keys())} field for all samples.")
 
     # TODO: this will fail because only single sample has an extra fields...
     # need to add additional check during kv_get to make sure other samples are correctly tackled
@@ -159,9 +176,9 @@ def demonstrate_kv_api():
     # print(f"  Retrieved all fields for {len(all_keys)} samples:")
     # print(f"    Fields: {list(retrieved_all.keys())}")
 
-    # Step 7: Clear specific keys
-    print("\n[Step 7] Clearing keys from partition...")
-    keys_to_clear = all_keys[:2]  # Clear first 2 keys
+    # Step 8: Clear specific keys
+    print("\n[Step 8] Clearing keys from partition...")
+    keys_to_clear = all_keys[:2]  # Delete the first 2 keys
     tq.kv_clear(keys=keys_to_clear, partition_id=partition_id)
     print(f"  ✓ Cleared keys: {keys_to_clear}")
 
@@ -176,33 +193,31 @@ def main():
             """
         TransferQueue Tutorial 2: Key-Value (KV) Semantic API
 
-        This tutorial demonstrates the KV semantic API, which provides a simpler
-        interface for data storage and retrieval using user-defined string keys
-        instead of auto-generated numeric indexes.
+        This tutorial demonstrates the KV semantic API, which provides a simple
+        interface for data storage and retrieval using user-defined string keys.
 
         Key Methods:
-        1. kv_put          - Put a single key-value pair with optional metadata tag
-        2. kv_batch_put    - Put multiple key-value pairs efficiently in batch
-        3. kv_get          - Retrieve data by key(s), optionally specifying fields
-        4. kv_list        - List all keys and their metadata tags in a partition
-        5. kv_clear        - Remove key-value pairs from storage
+        1. (async_)kv_put          - Insert/Update a multi-column sample by key, with optional metadata tag
+        2. (async_)kv_batch_put    - Put multiple key-value pairs efficiently in batch
+        3. (async_)kv_get          - Retrieve samples (by keys), supporting column selection (by fields)
+        4. (async_)kv_list         - List keys and tags (metadata) in a partition
+        5. (async_)kv_clear        - Remove key-value pairs from storage
 
         Key Features:
-        ✓ User-defined keys      - Use meaningful string keys instead of numeric indexes
-        ✓ Fine-grained access    - Get/put individual fields within a sample
-        ✓ Partition management   - Each partition maintains its own key-value mapping
-        ✓ Metadata tags          - Attach custom metadata (status, scores, etc.) to samples
+        ✓ Redis-style Semantics  - Familiar KV interface (Put/Get/List) for zero learning curve
+        ✓ Fine-grained Access    - Update or retrieve specific fields (columns) within a key (row) without full op.
+        ✓ Partition Isolation    - Logical separation of storage namespaces
+        ✓ Metadata Tags          - Lightweight metadata for status tracking
+        ✓ Pluggable Backends     - Supports multiple backends
 
         Use Cases:
-        - Storing per-model-checkpoint states
-        - Managing evaluation results by sample ID
-        - Caching intermediate computation results
-        - Fine-grained data access without full BatchMeta management
-
-        Limitations (vs Full API):
-        - No built-in production/consumption tracking (manage via tags)
-        - No Sampler-based sampling (implement sampling logic externally)
-        - Controller doesn't control streaming (manual key management required)
+        - Focusing on fine-grained data access where extreme streaming performance is non-essential
+        - Integration with external ReplayBuffer/single-controller that manage sample dispatching
+        
+        Limitations (vs low-level native APIs):
+        - No built-in production/consumption tracking: Users have to manually check status through tags.
+        - No built-in Sampler support: Must implement data dispatch by ReplayBuffer or single-controller externally.
+        - No fully streaming: Consumers must wait for single-controller to dispatch `keys`.
         """
         )
     )
@@ -219,11 +234,10 @@ def main():
         print("Tutorial Complete!")
         print("=" * 80)
         print("\nKey Takeaways:")
-        print("  1. KV API simplifies data access with user-defined string keys")
-        print("  2. kv_batch_put is more efficient for bulk operations")
-        print("  3. Use 'fields' parameter to get/put specific fields only")
-        print("  4. Tags enable custom metadata for production status, scores, etc.")
-        print("  5. Use kv_list to inspect partition contents")
+        print("  1. KV API simplifies data access with Redis-style semantics")
+        print("  2. Use 'fields' parameter to get/put specific fields only")
+        print("  3. Tags enable custom metadata for production status, scores, etc.")
+        print("  4. Use kv_list to inspect partition contents")
 
         # Cleanup
         tq.close()
