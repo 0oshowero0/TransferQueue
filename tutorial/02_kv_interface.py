@@ -146,12 +146,12 @@ def demonstrate_kv_api():
 
     # Step 4: Only update tags through kv_put
     print("\n[Step 4] Update existing tags without providing value...")
-    key = "0_0"
-    tag = {"global_steps": 0, "status": "finish", "model_version": 0}
-    print(f"  Target Key: {key}")
-    print(f"  The updated tag is: {tag}")
-    tq.kv_put(key=key, partition_id=partition_id, fields=None, tag=tag)
-    print(f"  ✓ Update success: Samples '0_0' now has tag as {tag}.")
+    key_for_update_tags = "0_0"
+    tag_update = {"global_steps": 0, "status": "finish", "model_version": 0}
+    print(f"  Target Key: {key_for_update_tags}")
+    print(f"  The updated tag is: {tag_update}")
+    tq.kv_put(key=key_for_update_tags, partition_id=partition_id, fields=None, tag=tag_update)
+    print(f"  ✓ Update success: Samples '0_0' now has tag as {tag_update}.")
 
     # Step 5: List all keys and tags in a partition
     print("\n[Step 5] Listing all keys and tags in partition...")
@@ -168,13 +168,14 @@ def demonstrate_kv_api():
     retrieved_input_ids = tq.kv_get(keys=all_keys, partition_id=partition_id, fields="input_ids")
     print(f"  ✓ Successfully retrieved only {list(retrieved_input_ids.keys())} field for all samples.")
 
-    # TODO: this will fail because only single sample has an extra fields...
-    # need to add additional check during kv_get to make sure other samples are correctly tackled
-    # # Step 6: Retrieve all fields using kv_get
-    # print("\n[Step 6] Retrieving all fields with kv_get...")
-    # retrieved_all = tq.kv_get(keys=all_keys, partition_id=partition_id)
-    # print(f"  Retrieved all fields for {len(all_keys)} samples:")
-    # print(f"    Fields: {list(retrieved_all.keys())}")
+    # # Step 7: Retrieve all fields using kv_get
+    print("\n[Step 7] Retrieving all fields with kv_get...")
+    retrieved_all = tq.kv_get(keys=all_keys, partition_id=partition_id)
+    print(f"  Retrieved all fields for {all_keys}:")
+    print(f"  Fields: {list(retrieved_all.keys())}")
+    print(
+        f"  Note: We cannot retrieve fields {list(response_batch.keys())}, since they only available in {append_keys}"
+    )
 
     # Step 8: Clear specific keys
     print("\n[Step 8] Clearing keys from partition...")

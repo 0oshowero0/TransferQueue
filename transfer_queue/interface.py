@@ -813,6 +813,7 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
 
     Raises:
         RuntimeError: If keys or partition are not found
+        RuntimeError: If empty fields exist in any key (sample)
 
     Example:
         >>> import transfer_queue as tq
@@ -838,8 +839,10 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
             fields = [fields]
         batch_meta = batch_meta.select_fields(fields)
 
-    data = tq_client.get_data(batch_meta)
+    if not batch_meta.is_ready:
+        raise RuntimeError("Some fields are not ready in all the requested keys!")
 
+    data = tq_client.get_data(batch_meta)
     return data
 
 
@@ -1052,6 +1055,7 @@ async def async_kv_get(
 
     Raises:
         RuntimeError: If keys or partition are not found
+        RuntimeError: If empty fields exist in any key (sample)
 
     Example:
         >>> import transfer_queue as tq
@@ -1077,8 +1081,10 @@ async def async_kv_get(
             fields = [fields]
         batch_meta = batch_meta.select_fields(fields)
 
-    data = await tq_client.async_get_data(batch_meta)
+    if not batch_meta.is_ready:
+        raise RuntimeError("Some fields are not ready in all the requested keys!")
 
+    data = await tq_client.async_get_data(batch_meta)
     return data
 
 

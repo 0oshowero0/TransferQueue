@@ -1512,7 +1512,15 @@ class TransferQueueController:
         verified_global_indexes = [idx for idx in global_indexes if idx is not None]
         assert len(verified_global_indexes) == len(keys)
 
-        data_fields = list(partition.field_name_mapping.keys())
+        # must fetch fields that the requested samples all have
+        col_mask = partition.production_status[verified_global_indexes, :].sum(dim=0).reshape(-1) == len(
+            verified_global_indexes
+        )
+        data_fields = []
+        for fname, col_idx in partition.field_name_mapping.items():
+            if col_mask[col_idx]:
+                data_fields.append(fname)
+
         metadata = self.generate_batch_meta(partition_id, verified_global_indexes, data_fields, mode="force_fetch")
 
         return metadata
