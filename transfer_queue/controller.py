@@ -547,6 +547,8 @@ class DataPartitionStatus:
         )
 
         if mask:
+            with self.data_status_lock:
+                self.ensure_samples_capacity(max(partition_global_index) + 1)
             consumption_status = consumption_status[partition_global_index]
 
         return partition_global_index, consumption_status
