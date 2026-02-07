@@ -387,7 +387,7 @@ def main():
     print(
         textwrap.dedent(
             """
-        TransferQueue Tutorial 2: Metadata System
+        TransferQueue Tutorial 3: Metadata System
 
         This script introduces the metadata system in TransferQueue, which tracks
         the structure and state of data:
