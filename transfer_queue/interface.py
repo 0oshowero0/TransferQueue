@@ -271,8 +271,8 @@ def set_custom_meta(metadata: BatchMeta) -> None:
 
     Args:
         metadata: BatchMeta containing the samples and their custom metadata to store.
-                 The custom_meta should be set using BatchMeta.update_custom_meta() or
-                 BatchMeta.set_custom_meta() before calling this method.
+                 The custom_meta should be set using BatchMeta.update_custom_meta()
+                 before calling this method.
 
     Raises:
         RuntimeError: If communication fails or controller returns error response
@@ -484,8 +484,8 @@ async def async_set_custom_meta(
 
     Args:
         metadata: BatchMeta containing the samples and their custom metadata to store.
-                 The custom_meta should be set using BatchMeta.update_custom_meta() or
-                 BatchMeta.set_custom_meta() before calling this method.
+                 The custom_meta should be set using BatchMeta.update_custom_meta()
+                 before calling this method.
         socket: ZMQ async socket for message transmission (injected by decorator)
 
     Raises:

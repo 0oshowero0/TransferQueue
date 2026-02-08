@@ -589,7 +589,9 @@ class KVStorageManager(TransferQueueStorageManager):
             for global_idx in metadata.global_indexes:
                 per_field_custom_backend_meta[global_idx] = {}
 
-            # TODO(tianyi): the order of custom meta is coupled with keys/values
+            # FIXME(tianyi): the order of custom backend meta is coupled with keys/values
+            # FIXME: if put_data is called to partially update/add new fields, the current
+            #       implementation will cause custom_backend_meta losses or mismatch!
             for (field_name, global_idx), meta_value in zip(
                 itertools.product(sorted(metadata.field_names), metadata.global_indexes),
                 custom_backend_meta,
