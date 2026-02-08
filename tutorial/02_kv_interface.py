@@ -200,7 +200,7 @@ def main():
         Key Methods:
         1. (async_)kv_put          - Insert/Update a multi-column sample by key, with optional metadata tag
         2. (async_)kv_batch_put    - Put multiple key-value pairs efficiently in batch
-        3. (async_)kv_batch_get          - Retrieve samples (by keys), supporting column selection (by fields)
+        3. (async_)kv_batch_get    - Retrieve samples (by keys), supporting column selection (by fields)
         4. (async_)kv_list         - List keys and tags (metadata) in a partition
         5. (async_)kv_clear        - Remove key-value pairs from storage
 
@@ -216,9 +216,9 @@ def main():
         - Integration with external ReplayBuffer/single-controller that manage sample dispatching
         
         Limitations (vs low-level native APIs):
-        - No built-in production/consumption tracking: Users have to manually check status through tags.
+        - No built-in production/consumption tracking: Users must manually check status via tags externally.
         - No built-in Sampler support: Must implement data dispatch by ReplayBuffer or single-controller externally.
-        - No fully streaming: Consumers must wait for single-controller to dispatch `keys`.
+        - Not fully streaming: Consumers must wait for single-controller to dispatch `keys`.
         """
         )
     )
