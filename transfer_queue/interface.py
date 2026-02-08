@@ -798,7 +798,7 @@ def kv_batch_put(keys: list[str], partition_id: str, fields: TensorDict, tags: l
         tq_client.set_custom_meta(batch_meta)
 
 
-def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None) -> TensorDict:
+def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None) -> TensorDict:
     """Get data from TransferQueue using user-specified keys.
 
     This is a convenience method for retrieving data using keys instead of indexes.
@@ -819,9 +819,9 @@ def kv_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] 
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> # Get single key with all fields
-        >>> data = tq.kv_get(key="sample_1", partition_id="train")
+        >>> data = tq.kv_batch_get(key="sample_1", partition_id="train")
         >>> # Get multiple keys with specific fields
-        >>> data = tq.kv_get(
+        >>> data = tq.kv_batch_get(
         ...     keys=["sample_1", "sample_2"],
         ...     partition_id="train",
         ...     fields="input_ids"
@@ -1038,7 +1038,7 @@ async def async_kv_batch_put(
         await tq_client.async_set_custom_meta(batch_meta)
 
 
-async def async_kv_get(
+async def async_kv_batch_get(
     keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None
 ) -> TensorDict:
     """Asynchronously get data from TransferQueue using user-specified keys.
@@ -1061,9 +1061,9 @@ async def async_kv_get(
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> # Get single key with all fields
-        >>> data = await tq.async_kv_get(key="sample_1", partition_id="train")
+        >>> data = await tq.async_kv_batch_get(key="sample_1", partition_id="train")
         >>> # Get multiple keys with specific fields
-        >>> data = await tq.async_kv_get(
+        >>> data = await tq.async_kv_batch_get(
         ...     keys=["sample_1", "sample_2"],
         ...     partition_id="train",
         ...     fields="input_ids"

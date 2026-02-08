@@ -56,10 +56,10 @@ if not ray.is_initialized():
 def demonstrate_kv_api():
     """
     Demonstrate the Key-Value (KV) semantic API:
-    kv_put & kv_batch_put -> kv_list -> kv_get -> kv_clear
+    kv_put & kv_batch_put -> kv_list -> kv_batch_get -> kv_clear
     """
     print("=" * 80)
-    print("Key-Value Semantic API Demo: kv_put/kv_batch_put → kv_list → kv_get → kv_clear")
+    print("Key-Value Semantic API Demo: kv_put/kv_batch_put → kv_list → kv_batch_get → kv_clear")
     print("=" * 80)
 
     # Step 1: Put a single key-value pair with kv_put
@@ -161,16 +161,16 @@ def demonstrate_kv_api():
     for k, t in zip(all_keys, all_tags, strict=False):
         print(f"    - key='{k}' | tag={t}")
 
-    # Step 6: Retrieve specific fields using kv_get
-    print("\n[Step 6] Retrieving specific fields (Column) with kv_get...")
+    # Step 6: Retrieve specific fields using kv_batch_get
+    print("\n[Step 6] Retrieving specific fields (Column) with kv_batch_get...")
     print("  Fetching only 'input_ids' to save bandwidth (ignoring 'attention_mask' and 'response').")
 
-    retrieved_input_ids = tq.kv_get(keys=all_keys, partition_id=partition_id, fields="input_ids")
+    retrieved_input_ids = tq.kv_batch_get(keys=all_keys, partition_id=partition_id, fields="input_ids")
     print(f"  ✓ Successfully retrieved only {list(retrieved_input_ids.keys())} field for all samples.")
 
-    # # Step 7: Retrieve all fields using kv_get
-    print("\n[Step 7] Retrieving all fields with kv_get...")
-    retrieved_all = tq.kv_get(keys=all_keys, partition_id=partition_id)
+    # # Step 7: Retrieve all fields using kv_batch_get
+    print("\n[Step 7] Retrieving all fields with kv_batch_get...")
+    retrieved_all = tq.kv_batch_get(keys=all_keys, partition_id=partition_id)
     print(f"  Retrieved all fields for {all_keys}:")
     print(f"  Fields: {list(retrieved_all.keys())}")
     print(
@@ -200,7 +200,7 @@ def main():
         Key Methods:
         1. (async_)kv_put          - Insert/Update a multi-column sample by key, with optional metadata tag
         2. (async_)kv_batch_put    - Put multiple key-value pairs efficiently in batch
-        3. (async_)kv_get          - Retrieve samples (by keys), supporting column selection (by fields)
+        3. (async_)kv_batch_get          - Retrieve samples (by keys), supporting column selection (by fields)
         4. (async_)kv_list         - List keys and tags (metadata) in a partition
         5. (async_)kv_clear        - Remove key-value pairs from storage
 

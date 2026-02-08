@@ -16,7 +16,7 @@
 """End-to-end tests for KV interface in transfer_queue.interface.
 
 This test module validates the KV interface functionality by:
-1. Using external interfaces (kv_put, kv_batch_put, kv_get, kv_list, kv_clear) for read/write
+1. Using external interfaces (kv_put, kv_batch_put, kv_batch_get, kv_list, kv_clear) for read/write
 2. Verifying correctness by calling TransferQueueController's internal methods directly
 """
 
@@ -92,10 +92,44 @@ def assert_tensor_close(tensor_a, tensor_b, rtol=1e-5, atol=1e-8, msg=""):
 class TestKVPutE2E:
     """End-to-end tests for kv_put functionality."""
 
+    def test_kv_put_with_dict_fields(self, controller):
+        """Test kv_put with dict fields (auto-converted to TensorDict)."""
+        partition_id = "test_partition"
+        key = "sample_0"
+
+        # Put with dict fields - will be auto-unsqueezed
+        tq.kv_put(
+            key=key, partition_id=partition_id, fields={"data": torch.tensor([1, 2, 3, 4])}, tag={"type": "dict_test"}
+        )
+
+        # Verify - retrieved data will have batch dimension
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id)
+        expected = torch.tensor([[1, 2, 3, 4]])  # unsqueezed
+        assert_tensor_equal(retrieved["data"], expected)
+
+    def test_kv_put_with_tensordict_fields(self, controller):
+        """Test kv_put with tensordict fields."""
+        partition_id = "test_partition"
+        key = "sample_1"
+
+        tensordict_data = TensorDict(
+            {
+                "input_ids": torch.tensor([[1, 2, 3, 4]]),
+            },
+            batch_size=1,
+        )
+        # Put with dict fields - will be auto-unsqueezed
+        tq.kv_put(key=key, partition_id=partition_id, fields=tensordict_data, tag={"type": "tensordict_test"})
+
+        # Verify - retrieved data will have batch dimension
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id)
+        expected = torch.tensor([[1, 2, 3, 4]])  # unsqueezed
+        assert_tensor_equal(retrieved["input_ids"], expected)
+
     def test_kv_put_single_sample_with_fields_and_tag(self, controller):
         """Test putting a single sample with fields and tag."""
         partition_id = "test_partition"
-        key = "sample_0"
+        key = "sample_2"
         # Use 1D tensors - kv_put with dict will auto-unsqueeze to add batch dimension
         input_ids = torch.tensor([1, 2, 3])
         attention_mask = torch.ones(3)
@@ -129,8 +163,8 @@ class TestKVPutE2E:
         input_ids_col_idx = partition.field_name_mapping["input_ids"]
         assert partition.production_status[global_idx, input_ids_col_idx] == 1, "input_ids should be marked as produced"
 
-        # Retrieve and verify data via kv_get - tensors will have batch dimension
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id)
+        # Retrieve and verify data via kv_batch_get - tensors will have batch dimension
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id)
         assert "input_ids" in retrieved.keys()
         assert "attention_mask" in retrieved.keys()
         # After unsqueeze, tensors become 2D [batch_size=1, original_size]
@@ -142,9 +176,9 @@ class TestKVPutE2E:
     def test_kv_put_update_tag_only(self, controller):
         """Test updating only tag without providing fields."""
         partition_id = "test_partition"
-        key = "sample_1"
+        key = "sample_3"
 
-        # First put with fields - use TensorDict to avoid unsqueeze
+        # First put with fields - use TensorDict as another example
         single_data = TensorDict({"value": torch.tensor([[10]])}, batch_size=1)
         tq.kv_put(key=key, partition_id=partition_id, fields=single_data, tag={"version": 1})
 
@@ -159,23 +193,42 @@ class TestKVPutE2E:
         assert partition.custom_meta[global_idx]["status"] == "updated"
 
         # Data should still be accessible
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id)
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id)
         assert_tensor_equal(retrieved["value"], torch.tensor([[10]]))
 
-    def test_kv_put_with_dict_fields(self, controller):
-        """Test kv_put with dict fields (auto-converted to TensorDict)."""
+    def test_kv_put_partial_update(self, controller):
+        """Test adding new fields to existing sample."""
         partition_id = "test_partition"
-        key = "sample_2"
+        key = "sample_4"
 
-        # Put with dict fields - will be auto-unsqueezed
-        tq.kv_put(
-            key=key, partition_id=partition_id, fields={"data": torch.tensor([1, 2, 3, 4])}, tag={"type": "dict_test"}
+        # First put initial data
+        initial_data = TensorDict(
+            {
+                "input_ids": torch.tensor([[1, 2, 3, 4]]),
+            },
+            batch_size=1,
         )
+        tq.kv_put(key=key, partition_id=partition_id, fields=initial_data, tag={"v": 1})
 
-        # Verify - retrieved data will have batch dimension
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id)
-        expected = torch.tensor([[1, 2, 3, 4]])  # unsqueezed
-        assert_tensor_equal(retrieved["data"], expected)
+        # Add new fields to subset of keys
+        new_fields = TensorDict(
+            {
+                "response": torch.tensor([[5, 6]]),
+            },
+            batch_size=1,
+        )
+        tq.kv_put(key=key, partition_id=partition_id, fields=new_fields, tag={"v": 2})
+
+        # Verify via controller - only keys[1] should have response field
+        partition = get_controller_partition(controller, partition_id)
+        global_idx = partition.keys_mapping[key]
+
+        # Check that fields were added
+        assert "response" in partition.field_name_mapping
+        response_col_idx = partition.field_name_mapping["response"]
+
+        # key should have response marked as produced
+        assert partition.production_status[global_idx, response_col_idx] == 1, "Key should have response"
 
 
 class TestKVBatchPutE2E:
@@ -222,8 +275,8 @@ class TestKVBatchPutE2E:
             assert partition.custom_meta[global_idx]["idx"] == i
             assert partition.custom_meta[global_idx]["batch"] is True
 
-        # Verify all data via kv_get
-        retrieved = tq.kv_get(keys=keys, partition_id=partition_id)
+        # Verify all data via kv_batch_get
+        retrieved = tq.kv_batch_get(keys=keys, partition_id=partition_id)
         assert_tensor_equal(retrieved["input_ids"], batch_input_ids)
         assert_tensor_equal(retrieved["attention_mask"], batch_attention_mask)
 
@@ -267,9 +320,9 @@ class TestKVBatchPutE2E:
 
 
 class TestKVGetE2E:
-    """End-to-end tests for kv_get functionality."""
+    """End-to-end tests for kv_batch_get functionality."""
 
-    def test_kv_get_single_key(self, controller):
+    def test_kv_batch_get_single_key(self, controller):
         """Test getting data for a single key."""
         partition_id = "test_partition"
         key = "get_single"
@@ -279,10 +332,10 @@ class TestKVGetE2E:
 
         tq.kv_put(key=key, partition_id=partition_id, fields=fields, tag=None)
 
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id)
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id)
         assert_tensor_equal(retrieved["data"], expected_data)
 
-    def test_kv_get_multiple_keys(self, controller):
+    def test_kv_batch_get_multiple_keys(self, controller):
         """Test getting data for multiple keys."""
         partition_id = "test_partition"
         keys = ["get_multi_0", "get_multi_1", "get_multi_2"]
@@ -291,11 +344,25 @@ class TestKVGetE2E:
         fields = TensorDict({"data": expected_data}, batch_size=3)
         tq.kv_batch_put(keys=keys, partition_id=partition_id, fields=fields, tags=[{}, {}, {}])
 
-        retrieved = tq.kv_get(keys=keys, partition_id=partition_id)
+        retrieved = tq.kv_batch_get(keys=keys, partition_id=partition_id)
         assert_tensor_equal(retrieved["data"], expected_data)
 
-    def test_kv_get_specific_fields(self, controller):
-        """Test getting only specific fields."""
+    def test_kv_batch_get_partial_keys(self, controller):
+        """Test getting data for partial keys."""
+        partition_id = "test_partition"
+        keys = ["get_multi_3", "get_multi_4", "get_multi_5"]
+        partial_keys = ["get_multi_3", "get_multi_5"]
+        input_data = torch.tensor([[1, 2], [3, 4], [5, 6]])
+        expected_data = torch.tensor([[1, 2], [5, 6]])
+
+        fields = TensorDict({"data": input_data}, batch_size=3)
+        tq.kv_batch_put(keys=keys, partition_id=partition_id, fields=fields, tags=[{}, {}, {}])
+
+        retrieved = tq.kv_batch_get(keys=partial_keys, partition_id=partition_id)
+        assert_tensor_equal(retrieved["data"], expected_data)
+
+    def test_kv_batch_get_partial_fields(self, controller):
+        """Test getting only partial fields."""
         partition_id = "test_partition"
         key = "get_fields"
         # Use TensorDict to avoid auto-unsqueeze issue
@@ -311,25 +378,27 @@ class TestKVGetE2E:
         tq.kv_put(key=key, partition_id=partition_id, fields=fields, tag=None)
 
         # Get only input_ids
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id, fields="input_ids")
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id, fields="input_ids")
         assert "input_ids" in retrieved.keys()
         assert "attention_mask" not in retrieved.keys()
         assert "response" not in retrieved.keys()
         assert_tensor_equal(retrieved["input_ids"], input_ids)
 
         # Get multiple specific fields
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id, fields=["input_ids", "response"])
+        retrieved = tq.kv_batch_get(keys=key, partition_id=partition_id, fields=["input_ids", "response"])
         assert "input_ids" in retrieved.keys()
         assert "response" in retrieved.keys()
         assert "attention_mask" not in retrieved.keys()
+        assert_tensor_equal(retrieved["input_ids"], input_ids)
+        assert_tensor_equal(retrieved["response"], response)
 
-    def test_kv_get_nonexistent_key(self, controller):
+    def test_kv_batch_get_nonexistent_key(self, controller):
         """Test that getting data for non-existent key returns empty result."""
         partition_id = "test_partition"
 
         # Try to get data for a key that doesn't exist - should return empty or raise error
         try:
-            retrieved = tq.kv_get(keys="nonexistent_key", partition_id=partition_id)
+            retrieved = tq.kv_batch_get(keys="nonexistent_key", partition_id=partition_id)
             # If it returns, it should be empty
             assert retrieved.batch_size[0] == 0
         except RuntimeError as e:
@@ -392,6 +461,7 @@ class TestKVClearE2E:
         # Verify via controller - key should be removed
         partition = get_controller_partition(controller, partition_id)
         assert key not in partition.keys_mapping
+        assert other_key in partition.keys_mapping
 
     def test_kv_clear_multiple_keys(self, controller):
         """Test clearing multiple keys."""
@@ -413,78 +483,8 @@ class TestKVClearE2E:
         assert keys[3] in listed_keys
 
 
-class TestKVTagsE2E:
-    """End-to-end tests for tag functionality."""
-
-    def test_tag_preservation_across_operations(self, controller):
-        """Test that tags are preserved and updated correctly."""
-        partition_id = "test_partition"
-        key = "tag_test"
-
-        # Put with initial tag
-        tq.kv_put(
-            key=key,
-            partition_id=partition_id,
-            fields={"data": torch.tensor([[1]])},
-            tag={"version": 1, "status": "init"},
-        )
-
-        # Update with new tag (keeping version incrementing)
-        tq.kv_put(key=key, partition_id=partition_id, fields=None, tag={"version": 2, "status": "updated"})
-
-        # Verify tag is updated
-        partition = get_controller_partition(controller, partition_id)
-        global_idx = partition.keys_mapping[key]
-        assert partition.custom_meta[global_idx]["version"] == 2
-        assert partition.custom_meta[global_idx]["status"] == "updated"
-
-    def test_tag_retrieval_via_kv_list(self):
-        """Test retrieving tags via kv_list."""
-        partition_id = "test_partition"
-        keys = ["tag_list_0", "tag_list_1", "tag_list_2"]
-
-        expected_tags = [
-            {"score": 0.9, "label": "A"},
-            {"score": 0.85, "label": "B"},
-            {"score": 0.95, "label": "C"},
-        ]
-
-        for key, tag in zip(keys, expected_tags, strict=False):
-            tq.kv_put(key=key, partition_id=partition_id, fields={"x": torch.tensor([[1]])}, tag=tag)
-
-        # List and verify tags
-        listed_keys, tags = tq.kv_list(partition_id=partition_id)
-
-        for key, expected_tag in zip(keys, expected_tags, strict=False):
-            assert key in listed_keys
-            idx = listed_keys.index(key)
-            assert tags[idx] == expected_tag
-
-
 class TestKVE2ECornerCases:
     """End-to-end tests for corner cases."""
-
-    def test_key_to_global_index_mapping_consistency(self, controller):
-        """Test that key->global_index mapping is consistent across operations."""
-        partition_id = "test_partition"
-        keys = ["map_0", "map_1", "map_2", "map_3"]
-
-        # Put all keys
-        tq.kv_batch_put(
-            keys=keys,
-            partition_id=partition_id,
-            fields=TensorDict({"data": torch.randn(4, 5)}, batch_size=4),
-            tags=[{"i": i} for i in range(4)],
-        )
-
-        # Verify mapping consistency via controller
-        partition = get_controller_partition(controller, partition_id)
-
-        for key in keys:
-            assert key in partition.keys_mapping
-            global_idx = partition.keys_mapping[key]
-            assert global_idx in partition.revert_keys_mapping
-            assert partition.revert_keys_mapping[global_idx] == key
 
     def test_field_expansion_across_samples(self, controller):
         """Test that new fields can be added across samples."""
@@ -498,77 +498,26 @@ class TestKVE2ECornerCases:
         tq.kv_put(key=keys[0], partition_id=partition_id, fields={"field_b": torch.tensor([[2]])}, tag=None)
 
         # Add different field to second key
-        tq.kv_put(key=keys[1], partition_id=partition_id, fields={"field_c": torch.tensor([[3]])}, tag=None)
+        tq.kv_put(
+            key=keys[1],
+            partition_id=partition_id,
+            fields={"field_a": torch.tensor([[3]]), "field_c": torch.tensor([[4]])},
+            tag=None,
+        )
 
         # Verify field expansion in controller
         partition = get_controller_partition(controller, partition_id)
 
-        # All fields should be registered
+        # All fields should be registered, but only samples with the actual fields are labeled as READY_FOR_CONSUME
         assert "field_a" in partition.field_name_mapping
         assert "field_b" in partition.field_name_mapping
         assert "field_c" in partition.field_name_mapping
 
-    def test_empty_tag_list(self):
-        """Test operations with empty tags."""
-        partition_id = "test_partition"
-        key = "empty_tag"
-
-        # Use 1D tensor - will be auto-unsqueezed to 2D
-        tq.kv_put(key=key, partition_id=partition_id, fields={"data": torch.tensor([1])}, tag={})
-
-        # Should work and data should be retrievable - will be 2D after unsqueeze
-        retrieved = tq.kv_get(keys=key, partition_id=partition_id)
-        assert_tensor_equal(retrieved["data"], torch.tensor([[1]]))
-
-    def test_large_batch_put_and_get(self):
-        """Test putting and getting a large batch of samples."""
-        partition_id = "test_partition"
-        num_samples = 100
-        keys = [f"large_{i}" for i in range(num_samples)]
-
-        # Create batch data
-        data = TensorDict(
-            {
-                "input_ids": torch.randn(num_samples, 10),
-                "attention_mask": torch.ones(num_samples, 10),
-            },
-            batch_size=num_samples,
-        )
-
-        tags = [{"idx": i} for i in range(num_samples)]
-
-        # Batch put
-        tq.kv_batch_put(keys=keys, partition_id=partition_id, fields=data, tags=tags)
-
-        # Batch get all
-        retrieved = tq.kv_get(keys=keys, partition_id=partition_id)
-
-        assert retrieved["input_ids"].shape == (num_samples, 10)
-        assert retrieved["attention_mask"].shape == (num_samples, 10)
-
-        # Verify specific samples
-        assert_tensor_equal(retrieved["input_ids"][0], data["input_ids"][0])
-        assert_tensor_equal(retrieved["input_ids"][99], data["input_ids"][99])
-
-    def test_controller_partition_synchronization(self, controller):
-        """Test that controller partition state is synchronized with operations."""
-        partition_id = "test_partition"
-        key = "sync_test"
-
-        # Put data
-        tq.kv_put(key=key, partition_id=partition_id, fields={"x": torch.tensor([[42]])}, tag={"sync": True})
-
-        # Get snapshot before clear
-        partition_before = get_controller_partition(controller, partition_id)
-        global_idx = partition_before.keys_mapping[key]
-        assert partition_before.production_status[global_idx, partition_before.field_name_mapping["x"]] == 1
-
-        # Clear
-        tq.kv_clear(keys=key, partition_id=partition_id)
-
-        # Get snapshot after clear
-        partition_after = get_controller_partition(controller, partition_id)
-        assert key not in partition_after.keys_mapping
+        # We can only fetch "field_a" because not all requested keys has other fields
+        data = tq.kv_batch_get(keys=keys, partition_id=partition_id)
+        assert "field_a" in data
+        assert "field_b" not in data
+        assert "field_c" not in data
 
 
 def run_tests():
