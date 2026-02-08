@@ -970,6 +970,7 @@ class AsyncTransferQueueClient:
 
             if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE:
                 metadata = response_msg.body.get("metadata", BatchMeta.empty())
+                metadata = BatchMeta.from_dict(metadata) if isinstance(metadata, dict) else metadata
                 return metadata
             else:
                 raise RuntimeError(
