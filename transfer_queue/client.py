@@ -270,7 +270,7 @@ class AsyncTransferQueueClient:
         Example:
             >>> # Create batch with custom metadata
             >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=4, ...)
-            >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
+            >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
             >>> asyncio.run(client.async_set_custom_meta(batch_meta))
         """
         assert socket is not None
@@ -1193,8 +1193,8 @@ class TransferQueueClient(AsyncTransferQueueClient):
 
         Example:
             >>> # Create batch with custom metadata
-            >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=4, ...)
-            >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
+            >>> batch_meta = client.get_meta(data_fields=["input_ids"], batch_size=2, ...)
+            >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
             >>> client.set_custom_meta(batch_meta)
         """
 
@@ -1271,7 +1271,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
                 - Requested data fields (e.g., "prompts", "attention_mask")
 
         Example:
-            >>> batch_meta = client.get_data(
+            >>> batch_meta = client.get_meta(
             ...     data_fields=["prompts", "attention_mask"],
             ...     batch_size=4,
             ...     partition_id="train_0",

@@ -282,8 +282,8 @@ def set_custom_meta(metadata: BatchMeta) -> None:
         >>> tq.init()
         >>>
         >>> # Create batch with custom metadata
-        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=4, ...)
-        >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
+        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=2, ...)
+        >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
         >>> tq.set_custom_meta(batch_meta)
     """
     tq_client = _maybe_create_transferqueue_client()
@@ -367,7 +367,7 @@ def get_data(metadata: BatchMeta) -> TensorDict:
         >>> import transfer_queue as tq
         >>> tq.init()
         >>>
-        >>> batch_meta = tq.get_data(
+        >>> batch_meta = tq.get_meta(
         ...     data_fields=["prompts", "attention_mask"],
         ...     batch_size=4,
         ...     partition_id="train_0",
@@ -496,8 +496,8 @@ async def async_set_custom_meta(
         >>> tq.init()
         >>>
         >>> # Create batch with custom metadata
-        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=4, ...)
-        >>> batch_meta.update_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
+        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=2, ...)
+        >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
         >>> asyncio.run(tq.async_set_custom_meta(batch_meta))
     """
     tq_client = _maybe_create_transferqueue_client()
@@ -664,7 +664,10 @@ def close():
 
 # ==================== KV Interface API ====================
 def kv_put(
-    key: str, partition_id: str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]
+    key: str,
+    partition_id: str,
+    fields: Optional[TensorDict | dict[str, Any]] = None,
+    tag: Optional[dict[str, Any]] = None,
 ) -> None:
     """Put a single key-value pair to TransferQueue.
 
@@ -735,7 +738,9 @@ def kv_put(
         tq_client.set_custom_meta(batch_meta)
 
 
-def kv_batch_put(keys: list[str], partition_id: str, fields: TensorDict, tags: list[dict[str, Any]]) -> None:
+def kv_batch_put(
+    keys: list[str], partition_id: str, fields: Optional[TensorDict] = None, tags: Optional[list[dict[str, Any]]] = None
+) -> None:
     """Put multiple key-value pairs to TransferQueue in batch.
 
     This method stores multiple key-value pairs in a single operation, which is more
@@ -819,7 +824,7 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> # Get single key with all fields
-        >>> data = tq.kv_batch_get(key="sample_1", partition_id="train")
+        >>> data = tq.kv_batch_get(keys="sample_1", partition_id="train")
         >>> # Get multiple keys with specific fields
         >>> data = tq.kv_batch_get(
         ...     keys=["sample_1", "sample_2"],
@@ -885,7 +890,7 @@ def kv_clear(keys: list[str] | str, partition_id: str) -> None:
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> # Clear single key
-        >>> tq.kv_clear(key="sample_1", partition_id="train")
+        >>> tq.kv_clear(keys="sample_1", partition_id="train")
         >>> # Clear multiple keys
         >>> tq.kv_clear(keys=["sample_1", "sample_2"], partition_id="train")
     """
@@ -902,7 +907,10 @@ def kv_clear(keys: list[str] | str, partition_id: str) -> None:
 
 # ==================== KV Interface API ====================
 async def async_kv_put(
-    key: str, partition_id: str, fields: Optional[TensorDict | dict[str, Any]], tag: Optional[dict[str, Any]]
+    key: str,
+    partition_id: str,
+    fields: Optional[TensorDict | dict[str, Any]] = None,
+    tag: Optional[dict[str, Any]] = None,
 ) -> None:
     """Asynchronously put a single key-value pair to TransferQueue.
 
@@ -975,7 +983,7 @@ async def async_kv_put(
 
 
 async def async_kv_batch_put(
-    keys: list[str], partition_id: str, fields: TensorDict, tags: list[dict[str, Any]]
+    keys: list[str], partition_id: str, fields: Optional[TensorDict] = None, tags: Optional[list[dict[str, Any]]] = None
 ) -> None:
     """Asynchronously put multiple key-value pairs to TransferQueue in batch.
 
@@ -1061,7 +1069,7 @@ async def async_kv_batch_get(
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> # Get single key with all fields
-        >>> data = await tq.async_kv_batch_get(key="sample_1", partition_id="train")
+        >>> data = await tq.async_kv_batch_get(keys="sample_1", partition_id="train")
         >>> # Get multiple keys with specific fields
         >>> data = await tq.async_kv_batch_get(
         ...     keys=["sample_1", "sample_2"],
@@ -1127,7 +1135,7 @@ async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
         >>> import transfer_queue as tq
         >>> tq.init()
         >>> # Clear single key
-        >>> await tq.async_kv_clear(key="sample_1", partition_id="train")
+        >>> await tq.async_kv_clear(keys="sample_1", partition_id="train")
         >>> # Clear multiple keys
         >>> await tq.async_kv_clear(keys=["sample_1", "sample_2"], partition_id="train")
     """
