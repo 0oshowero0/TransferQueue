@@ -717,13 +717,13 @@ def kv_put(
         if isinstance(fields, dict):
             # TODO: consider whether to support this...
             batch = {}
-            for key, value in fields.items():
+            for field_name, value in fields.items():
                 if isinstance(value, torch.Tensor):
                     if value.is_nested:
                         raise ValueError("Please use (async)kv_batch_put for batch operation")
-                    batch[key] = value.unsqueeze(0)
+                    batch[field_name] = value.unsqueeze(0)
                 else:
-                    batch[key] = NonTensorStack(value)
+                    batch[field_name] = NonTensorStack(value)
             fields = TensorDict(batch, batch_size=[1])
         elif not isinstance(fields, TensorDict):
             raise ValueError("field can only be dict or TensorDict")
@@ -768,7 +768,7 @@ def kv_batch_put(keys: list[str], partition_id: str, fields: TensorDict, tags: l
     if fields is None and tags is None:
         raise ValueError("Please provide at least one parameter of fields or tag.")
 
-    if fields.batch_size[0] != len(keys):
+    if fields is not None and fields.batch_size[0] != len(keys):
         raise ValueError(
             f"`keys` with length {len(keys)} does not match the `fields` TensorDict with "
             f"batch_size {fields.batch_size[0]}"
@@ -846,7 +846,7 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
     return data
 
 
-def kv_list(partition_id: str) -> tuple[list[Optional[str]], list[Optional[dict[str, Any]]]]:
+def kv_list(partition_id: str) -> tuple[list[str], list[dict[str, Any]]]:
     """List all keys and their metadata in a partition.
 
     Args:
@@ -956,13 +956,13 @@ async def async_kv_put(
         if isinstance(fields, dict):
             # TODO: consider whether to support this...
             batch = {}
-            for key, value in fields.items():
+            for field_name, value in fields.items():
                 if isinstance(value, torch.Tensor):
                     if value.is_nested:
                         raise ValueError("Please use (async)kv_batch_put for batch operation")
-                    batch[key] = value.unsqueeze(0)
+                    batch[field_name] = value.unsqueeze(0)
                 else:
-                    batch[key] = NonTensorStack(value)
+                    batch[field_name] = NonTensorStack(value)
             fields = TensorDict(batch, batch_size=[1])
         elif not isinstance(fields, TensorDict):
             raise ValueError("field can only be dict or TensorDict")
@@ -1008,7 +1008,7 @@ async def async_kv_batch_put(
     if fields is None and tags is None:
         raise ValueError("Please provide at least one parameter of fields or tag.")
 
-    if fields.batch_size[0] != len(keys):
+    if fields is not None and fields.batch_size[0] != len(keys):
         raise ValueError(
             f"`keys` with length {len(keys)} does not match the `fields` TensorDict with "
             f"batch_size {fields.batch_size[0]}"

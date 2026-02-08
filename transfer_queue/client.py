@@ -943,7 +943,7 @@ class AsyncTransferQueueClient:
                 raise ValueError("Received an empty list as keys.")
             # validate all the elements are str
             if not all(isinstance(k, str) for k in keys):
-                raise TypeError("Not all element in `keys` are strings.")
+                raise TypeError("Not all elements in `keys` are strings.")
         else:
             raise TypeError("Only string or list of strings are allowed as `keys`.")
 
@@ -1028,7 +1028,7 @@ class AsyncTransferQueueClient:
                     f"{response_msg.body.get('message', 'Unknown error')}"
                 )
         except Exception as e:
-            raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_keys: {str(e)}") from e
+            raise RuntimeError(f"[{self.client_id}]: Error in kv_list: {str(e)}") from e
 
     def close(self) -> None:
         """Close the client and cleanup resources including storage manager."""
@@ -1475,7 +1475,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
     def kv_list(
         self,
         partition_id: str,
-    ) -> tuple[list[Optional[str]], list[Optional[dict]]]:
+    ) -> tuple[list[str], list[dict]]:
         """Synchronously retrieve keys and custom_meta from the controller for partition.
 
         Args:

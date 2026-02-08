@@ -922,8 +922,8 @@ class TestTransferQueueControllerKvInterface:
         # Verify custom_meta is preserved
         all_custom_meta = retrieved_metadata.get_all_custom_meta()
         assert len(all_custom_meta) == 2
-        assert all_custom_meta[metadata.global_indexes[0]]["score"] == 0.9
-        assert all_custom_meta[metadata.global_indexes[1]]["tag"] == "B"
+        assert all_custom_meta[0]["score"] == 0.9
+        assert all_custom_meta[1]["tag"] == "B"
 
         print("✓ kv_retrieve_keys preserves custom_meta")
 
