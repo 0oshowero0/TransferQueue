@@ -545,6 +545,9 @@ class DataPartitionStatus:
         )
 
         if mask:
+            if partition_global_index.numel() == 0:
+                empty_status = self.consumption_status[task_name].new_zeros(0)
+                return partition_global_index, empty_status
             with self.data_status_lock:
                 self.ensure_samples_capacity(max(partition_global_index) + 1)
             consumption_status = self.consumption_status[task_name][partition_global_index]
