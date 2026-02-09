@@ -753,7 +753,7 @@ async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
 # ==================== Low-Level Native API ====================
 # For low-level API support, please refer to transfer_queue/client.py for details.
 def get_client():
-    global _TRANSFER_QUEUE_CLIENT
+    """Get a TransferQueueClient for using low-level API"""
     if _TRANSFER_QUEUE_CLIENT is None:
         raise RuntimeError("Please initialize the TransferQueue first by calling `tq.init()`!")
     return _TRANSFER_QUEUE_CLIENT
