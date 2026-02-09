@@ -186,6 +186,8 @@ def demonstrate_random_sampler_with_replacement():
     sampler = RandomSamplerWithReplacement()
     setup_transfer_queue_with_sampler(sampler)
 
+    tq_client = tq.get_client()
+
     # Add 5 samples
     print("\n[Step 1] Adding 5 samples...")
     data = TensorDict(
@@ -194,22 +196,22 @@ def demonstrate_random_sampler_with_replacement():
         },
         batch_size=5,
     )
-    tq.put(data=data, partition_id="test")
+    tq_client.put(data=data, partition_id="test")
     print("  ✓ 5 samples added")
 
     # Get batch 1 (should get 2 random samples)
     print("\n[Step 2] Get batch 1 (2 samples)...")
-    meta1 = tq.get_meta(data_fields=["input"], batch_size=2, partition_id="test", task_name="demo_task")
+    meta1 = tq_client.get_meta(data_fields=["input"], batch_size=2, partition_id="test", task_name="demo_task")
     print(f"  ✓ Got samples: {meta1.global_indexes}")
 
     # Get batch 2 (should get 1 random sample with replacement - may have duplicate with previous batch!)
     print("\n[Step 3] Get batch 2 (1 sample)...")
-    meta2 = tq.get_meta(data_fields=["input"], batch_size=1, partition_id="test", task_name="demo_task")
+    meta2 = tq_client.get_meta(data_fields=["input"], batch_size=1, partition_id="test", task_name="demo_task")
     print(f"  ✓ Got samples: {meta2.global_indexes}")
 
     # Get batch 3 (should get 2 random samples with replacement - may have duplicate with previous batches!)
     print("\n[Step 4] Get batch 3 (2 samples)...")
-    meta3 = tq.get_meta(data_fields=["input"], batch_size=2, partition_id="test", task_name="demo_task")
+    meta3 = tq_client.get_meta(data_fields=["input"], batch_size=2, partition_id="test", task_name="demo_task")
     print(f"  ✓ Got samples: {meta3.global_indexes}")
 
     print("\n[Verification]")
@@ -219,7 +221,7 @@ def demonstrate_random_sampler_with_replacement():
     print(f"  ✓ All sampled: {all_sampled}")
 
     # Cleanup
-    tq.clear_partition(partition_id="test")
+    tq_client.clear_partition(partition_id="test")
     tq.close()
     ray.shutdown()
 
@@ -234,6 +236,8 @@ def demonstrate_random_sampler_without_replacement():
     sampler = RandomSamplerWithoutReplacement()
     setup_transfer_queue_with_sampler(sampler)
 
+    tq_client = tq.get_client()
+
     # Add 6 samples
     print("\n[Step 1] Adding 6 samples...")
     data = TensorDict(
@@ -242,22 +246,22 @@ def demonstrate_random_sampler_without_replacement():
         },
         batch_size=6,
     )
-    tq.put(data=data, partition_id="test")
+    tq_client.put(data=data, partition_id="test")
     print("  ✓ 6 samples added")
 
     # Get batch 1 (should get 3 random samples without replacement)
     print("\n[Step 2] Get batch 1 (3 samples)...")
-    meta1 = tq.get_meta(data_fields=["input"], batch_size=3, partition_id="test", task_name="demo_task")
+    meta1 = tq_client.get_meta(data_fields=["input"], batch_size=3, partition_id="test", task_name="demo_task")
     print(f"  ✓ Got samples: {meta1.global_indexes}")
 
     # Get batch 2 (should randomly get 1 sample that are different from previous batch)
     print("\n[Step 3] Get batch 2 (1 samples)...")
-    meta2 = tq.get_meta(data_fields=["input"], batch_size=1, partition_id="test", task_name="demo_task")
+    meta2 = tq_client.get_meta(data_fields=["input"], batch_size=1, partition_id="test", task_name="demo_task")
     print(f"  ✓ Got samples: {meta2.global_indexes}")
 
     # Get batch 3 (should randomly get 2 samples that are different from previous batch)
     print("\n[Step 4] Get batch 3 (2 samples)...")
-    meta3 = tq.get_meta(data_fields=["input"], batch_size=2, partition_id="test", task_name="demo_task")
+    meta3 = tq_client.get_meta(data_fields=["input"], batch_size=2, partition_id="test", task_name="demo_task")
     print(f"  ✓ Got samples: {meta3.global_indexes}")
 
     print("\n[Verification]")
@@ -267,7 +271,7 @@ def demonstrate_random_sampler_without_replacement():
     print(f"  ✓ Batch 3: {meta3.global_indexes} (none left)")
 
     # Cleanup
-    tq.clear_partition(partition_id="test")
+    tq_client.clear_partition(partition_id="test")
     tq.close()
     ray.shutdown()
 
@@ -282,6 +286,8 @@ def demonstrate_priority_sampler():
     sampler = PrioritySampler()
     setup_transfer_queue_with_sampler(sampler)
 
+    tq_client = tq.get_client()
+
     # Add 8 samples
     print("\n[Step 1] Adding 8 samples...")
     data = TensorDict(
@@ -290,7 +296,7 @@ def demonstrate_priority_sampler():
         },
         batch_size=8,
     )
-    tq.put(data=data, partition_id="test")
+    tq_client.put(data=data, partition_id="test")
     print("  ✓ 8 samples added")
 
     time.sleep(1)
@@ -303,7 +309,7 @@ def demonstrate_priority_sampler():
     print(f"Priority scores: {priority_scores}")
 
     # Get batch using priority sampling
-    meta1 = tq.get_meta(
+    meta1 = tq_client.get_meta(
         data_fields=["input"],
         batch_size=1,
         partition_id="test",
@@ -315,7 +321,7 @@ def demonstrate_priority_sampler():
 
     # Get another batch
     print("\n[Step 3] Get another batch (2 samples)...")
-    meta2 = tq.get_meta(
+    meta2 = tq_client.get_meta(
         data_fields=["input"],
         batch_size=2,
         partition_id="test",
@@ -331,7 +337,7 @@ def demonstrate_priority_sampler():
     print(f"  ✓ Batch 2 high-priority indices: {[i for i in meta2.global_indexes if priority_scores[i] >= 0.1]}")
 
     # Cleanup
-    tq.clear_partition(partition_id="test")
+    tq_client.clear_partition(partition_id="test")
     tq.close()
     ray.shutdown()
 

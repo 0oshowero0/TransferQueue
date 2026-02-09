@@ -63,6 +63,7 @@ def demonstrate_data_workflow():
 
     # Step 1: Put data
     print("[Step 1] Putting data into TransferQueue...")
+    tq_client = tq.get_client()
 
     input_ids = torch.tensor(
         [
@@ -84,12 +85,12 @@ def demonstrate_data_workflow():
 
     print(f"  Created {data_batch.batch_size[0]} samples")
     partition_id = "tutorial_partition_0"
-    tq.put(data=data_batch, partition_id=partition_id)
+    tq_client.put(data=data_batch, partition_id=partition_id)
     print(f"  ✓ Data written to partition: {partition_id}")
 
     # Step 2: Get metadata
     print("[Step 2] Requesting data metadata...")
-    batch_meta = tq.get_meta(
+    batch_meta = tq_client.get_meta(
         data_fields=["input_ids", "attention_mask"],
         batch_size=data_batch.batch_size[0],
         partition_id=partition_id,
@@ -100,7 +101,7 @@ def demonstrate_data_workflow():
 
     # Step 3: Get actual data
     print("[Step 3] Retrieving actual data...")
-    retrieved_data = tq.get_data(batch_meta)
+    retrieved_data = tq_client.get_data(batch_meta)
     print("  ✓ Data retrieved successfully")
     print(f"    Keys: {list(retrieved_data.keys())}")
 
@@ -112,7 +113,7 @@ def demonstrate_data_workflow():
 
     # Step 5: Clear
     print("[Step 5] Clearing partition... (you may also use clear_samples() to clear specific samples)")
-    tq.clear_partition(partition_id=partition_id)
+    tq_client.clear_partition(partition_id=partition_id)
     print("  ✓ Partition cleared")
 
 

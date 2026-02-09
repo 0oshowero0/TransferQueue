@@ -310,6 +310,8 @@ def demonstrate_real_workflow():
     # Initialize TransferQueue
     tq.init()
 
+    tq_client = tq.get_client()
+
     print("[Step 1] Putting data into TransferQueue...")
     input_ids = torch.randint(0, 1000, (8, 512))
     attention_mask = torch.ones(8, 512)
@@ -323,7 +325,7 @@ def demonstrate_real_workflow():
     )
 
     partition_id = "demo_partition"
-    batch_meta = tq.put(data=data_batch, partition_id=partition_id)
+    batch_meta = tq_client.put(data=data_batch, partition_id=partition_id)
     print(f"✓ Put {data_batch.batch_size[0]} samples into partition '{partition_id}', got BatchMeta back {batch_meta}.")
 
     print("[Step 2] [Optional] Setting sample-level custom_meta...")
@@ -335,11 +337,11 @@ def demonstrate_real_workflow():
     batch_meta.update_custom_meta(custom_meta)
     print(f"✓ Set custom_meta into BatchMeta: {batch_meta.get_all_custom_meta()}")
 
-    tq.set_custom_meta(batch_meta)
+    tq_client.set_custom_meta(batch_meta)
     print("✓ Successful to store custom_meta into TQ controller. Now you can retrieve the custom_meta from anywhere.")
 
     print("[Step 3] Try to get metadata from TransferQueue from other places...")
-    batch_meta = tq.get_meta(
+    batch_meta = tq_client.get_meta(
         data_fields=["input_ids", "attention_mask"],
         batch_size=8,
         partition_id=partition_id,
@@ -358,7 +360,7 @@ def demonstrate_real_workflow():
     print("✓ Selected 'input_ids' field only:")
     print(f"  New field names: {selected_meta.field_names}")
     print(f"  Samples still have same global indexes: {selected_meta.global_indexes}")
-    retrieved_data = tq.get_data(selected_meta)
+    retrieved_data = tq_client.get_data(selected_meta)
     print(f"  Retrieved data keys: {list(retrieved_data.keys())}")
 
     print("[Step 5] Select specific samples from the retrieved BatchMeta...")
@@ -366,7 +368,7 @@ def demonstrate_real_workflow():
     print("✓ Selected samples at indices [0, 2, 4, 6]:")
     print(f"  New global indexes: {partial_meta.global_indexes}")
     print(f"  Number of samples: {len(partial_meta)}")
-    retrieved_data = tq.get_data(partial_meta)
+    retrieved_data = tq_client.get_data(partial_meta)
     print(f"  Retrieved data samples: {retrieved_data}, all the data samples: {data_batch}")
 
     print("[Step 6] Demonstrate chunk operation...")
@@ -374,11 +376,11 @@ def demonstrate_real_workflow():
     print(f"✓ Chunked into {len(chunks)} parts:")
     for i, chunk in enumerate(chunks):
         print(f"  Chunk {i}: {len(chunk)} samples, indexes={chunk.global_indexes}")
-        chunk_data = tq.get_data(chunk)
+        chunk_data = tq_client.get_data(chunk)
         print(f"  Chunk {i}: Retrieved chunk data: {chunk_data}")
 
     # Cleanup
-    tq.clear_partition(partition_id=partition_id)
+    tq_client.clear_partition(partition_id=partition_id)
     tq.close()
     ray.shutdown()
     print("✓ Partition cleared and resources cleaned up")

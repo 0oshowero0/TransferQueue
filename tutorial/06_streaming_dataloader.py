@@ -123,6 +123,8 @@ def generate_worker(rank_id: int, num_samples: int = 20):
     # Need to call tq.init() in each process
     tq.init()
 
+    tq_client = tq.get_client()
+
     # Generate and put samples into the queue
     for i in range(num_samples):
         # Create unique sequence ID for this sample
@@ -137,7 +139,7 @@ def generate_worker(rank_id: int, num_samples: int = 20):
         print(f"[Generate Worker@{rank_id}]: Putting sample {seq_id} into TransferQueue")
 
         # Put data into the specified partition
-        tq.put(data, partition_id="train")
+        tq_client.put(data, partition_id="train")
 
     print(f"[Generate Worker@{rank_id}]: Complete putting samples into TransferQueue")
 
