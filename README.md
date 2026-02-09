@@ -95,10 +95,10 @@ This data structure design is motivated by the computational characteristics of 
 ### User Interface: High-Level & Low-Level APIs
 
 | Level | Tier | Style | Fine-Grained Access | Streaming | Sampler | Multiple-Backends | 
-|---|---|---|---|---|---|---|
-| High | **KV Interface** (this PR) | Put/Get/List/Clear | ✓ | ✗ | ✗ | ✓ | 
-| High |  **StreamingDataLoader** (#23) | PyTorch DataLoader | ✓ |✓ | ✓ | ✓ | 
-| Low |  **TransferQueueClient** | Metadata-based | ✓ | ✓ | ✓ | ✓ | 
+|---|---|---|---|------------------|---|---|
+| High | **KV Interface** (this PR) | Put/Get/List/Clear | ✓ | ○                | ✗ | ✓ | 
+| High |  **StreamingDataLoader** (#23) | PyTorch DataLoader | ✓ | ✓                | ✓ | ✓ | 
+| Low |  **TransferQueueClient** | Metadata-based | ✓ | ✓                | ✓ | ✓ | 
 
 
 #### Key-Value based API
