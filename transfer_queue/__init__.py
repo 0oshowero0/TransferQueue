@@ -44,7 +44,7 @@ from .interface import (
     put,
     set_custom_meta,
 )
-from .metadata import BatchMeta
+from .metadata import BatchMeta, KVBatchMeta
 from .sampler import BaseSampler
 from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
 from .sampler.rank_aware_sampler import RankAwareSampler
@@ -55,6 +55,19 @@ from .utils.zmq_utils import ZMQServerInfo, process_zmq_server_info
 
 __all__ = [
     "init",
+    "close",
+    "kv_put",
+    "kv_batch_put",
+    "kv_batch_get",
+    "kv_list",
+    "kv_clear",
+    "async_kv_put",
+    "async_kv_batch_put",
+    "async_kv_batch_get",
+    "async_kv_list",
+    "async_kv_clear",
+    "KVBatchMeta",
+] + [
     "get_meta",
     "get_data",
     "put",
@@ -67,22 +80,10 @@ __all__ = [
     "async_set_custom_meta",
     "async_clear_samples",
     "async_clear_partition",
-    "close",
-    "kv_put",
-    "kv_batch_put",
-    "kv_batch_get",
-    "kv_list",
-    "kv_clear",
-    "async_kv_put",
-    "async_kv_batch_put",
-    "async_kv_batch_get",
-    "async_kv_list",
-    "async_kv_clear",
-] + [
+    "BatchMeta",
     "TransferQueueClient",
     "StreamingDataset",
     "StreamingDataLoader",
-    "BatchMeta",
     "TransferQueueController",
     "SimpleStorageUnit",
     "ZMQServerInfo",
