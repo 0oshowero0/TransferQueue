@@ -857,8 +857,9 @@ class KVBatchMeta:
             raise ValueError(f"keys and tags must have same length, but got {len(self.keys)} and {len(self.tags)}")
         if len(self.keys) != len(set(self.keys)):
             raise ValueError("Got duplicated keys.")
-        if len(self.fields) != len(set(self.fields)):
-            raise ValueError("Got duplicated fields.")
+        if self.fields is not None:
+            if len(self.fields) != len(set(self.fields)):
+                raise ValueError("Got duplicated fields.")
 
         # deepcopy to prevent unexpected behavior after chunk/concat
         self.tags = copy.deepcopy(self.tags)

@@ -1074,7 +1074,7 @@ class TestKVBatchMeta:
         assert kv_meta.keys == []
         assert kv_meta.tags == []
         assert kv_meta.partition_id is None
-        assert kv_meta.fields == []
+        assert kv_meta.fields is None
 
     def test_kv_batch_meta_init_validation_keys_tags_mismatch(self):
         """Example: Init validation catches keys and tags length mismatch."""
