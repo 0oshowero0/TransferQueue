@@ -855,10 +855,6 @@ class KVBatchMeta:
         """Validate all the variables"""
         if len(self.keys) != len(self.tags):
             raise ValueError(f"keys and tags must have same length, but got {len(self.keys)} and {len(self.tags)}")
-        if len(self.keys) != len(self.partition_id):
-            raise ValueError(
-                f"keys and partition_ids must have same length, but got {len(self.keys)} and {len(self.partition_ids)}"
-            )
         if len(self.keys) != len(set(self.keys)):
             raise ValueError("Got duplicated keys.")
         if len(self.fields) != len(set(self.fields)):

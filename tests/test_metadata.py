@@ -27,7 +27,7 @@ from tensordict.tensorclass import NonTensorStack
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
-from transfer_queue.metadata import BatchMeta, FieldMeta, SampleMeta  # noqa: E402
+from transfer_queue.metadata import BatchMeta, FieldMeta, KVBatchMeta, SampleMeta  # noqa: E402
 from transfer_queue.utils.enum_utils import ProductionStatus  # noqa: E402
 
 
@@ -1045,3 +1045,290 @@ class TestEdgeCases:
         with pytest.raises(ValueError) as exc_info:
             BatchMeta.concat([batch1, batch2], validate=True)
         assert "Field names do not match" in str(exc_info.value)
+
+
+class TestKVBatchMeta:
+    """KVBatchMeta Tests"""
+
+    def test_kv_batch_meta_basic_init(self):
+        """Example: Basic KVBatchMeta initialization."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{"sample_id": 0}, {"sample_id": 1}, {"sample_id": 2}],
+            partition_id="partition_0",
+            fields=["field1", "field2"],
+        )
+
+        assert kv_meta.size == 3
+        assert len(kv_meta) == 3
+        assert kv_meta.keys == ["key1", "key2", "key3"]
+        assert kv_meta.partition_id == "partition_0"
+        assert kv_meta.fields == ["field1", "field2"]
+
+    def test_kv_batch_meta_empty_init(self):
+        """Example: Empty KVBatchMeta initialization."""
+        kv_meta = KVBatchMeta()
+
+        assert kv_meta.size == 0
+        assert len(kv_meta) == 0
+        assert kv_meta.keys == []
+        assert kv_meta.tags == []
+        assert kv_meta.partition_id is None
+        assert kv_meta.fields == []
+
+    def test_kv_batch_meta_init_validation_keys_tags_mismatch(self):
+        """Example: Init validation catches keys and tags length mismatch."""
+        with pytest.raises(ValueError) as exc_info:
+            KVBatchMeta(
+                keys=["key1", "key2"],
+                tags=[{"sample_id": 0}],  # Only one tag
+            )
+        assert "keys and tags must have same length" in str(exc_info.value)
+
+    def test_kv_batch_meta_init_validation_duplicate_keys(self):
+        """Example: Init validation catches duplicate keys."""
+        with pytest.raises(ValueError) as exc_info:
+            KVBatchMeta(
+                keys=["key1", "key1"],
+                tags=[{"sample_id": 0}, {"sample_id": 1}],
+                partition_id="partition_0",
+            )
+        assert "Got duplicated keys" in str(exc_info.value)
+
+    def test_kv_batch_meta_init_validation_duplicate_fields(self):
+        """Example: Init validation catches duplicate fields."""
+        with pytest.raises(ValueError) as exc_info:
+            KVBatchMeta(
+                keys=["key1"],
+                tags=[{"sample_id": 0}],
+                partition_id="partition_0",
+                fields=["field1", "field1"],
+            )
+        assert "Got duplicated fields" in str(exc_info.value)
+
+    def test_kv_batch_meta_select_keys(self):
+        """Example: Select specific keys from KVBatchMeta."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{"idx": 0}, {"idx": 1}, {"idx": 2}],
+            partition_id="partition_0",
+            fields=["field1", "field2"],
+            extra_info={"test": "value"},
+        )
+
+        selected = kv_meta.select_keys(["key1", "key3"])
+
+        assert selected.keys == ["key1", "key3"]
+        assert selected.tags == [{"idx": 0}, {"idx": 2}]
+        assert selected.partition_id == "partition_0"
+        assert selected.fields == ["field1", "field2"]
+        assert selected.extra_info == {"test": "value"}
+
+    def test_kv_batch_meta_select_keys_validation_duplicate(self):
+        """Example: Select keys validation catches duplicate keys in input."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{}, {}, {}],
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            kv_meta.select_keys(["key1", "key1"])
+        assert "Contain duplicate keys" in str(exc_info.value)
+
+    def test_kv_batch_meta_select_keys_validation_nonexistent(self):
+        """Example: Select keys validation catches non-existent keys."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{}, {}, {}],
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            kv_meta.select_keys(["key1", "nonexistent"])
+        assert "not found in current batch" in str(exc_info.value)
+
+    def test_kv_batch_meta_reorder(self):
+        """Example: Reorder samples in KVBatchMeta."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{"idx": 0}, {"idx": 1}, {"idx": 2}],
+        )
+
+        kv_meta.reorder([2, 0, 1])
+
+        assert kv_meta.keys == ["key3", "key1", "key2"]
+        assert kv_meta.tags == [{"idx": 2}, {"idx": 0}, {"idx": 1}]
+
+    def test_kv_batch_meta_reorder_validation_size_mismatch(self):
+        """Example: Reorder validation catches size mismatch."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{}, {}, {}],
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            kv_meta.reorder([0, 1])  # Only 2 indexes for 3 samples
+        assert "does not match" in str(exc_info.value)
+
+    def test_kv_batch_meta_reorder_validation_duplicate_indexes(self):
+        """Example: Reorder validation catches duplicate indexes."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2", "key3"],
+            tags=[{}, {}, {}],
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            kv_meta.reorder([0, 0, 1])  # Duplicate index 0
+        assert "Contain duplicate indexes" in str(exc_info.value)
+
+    def test_kv_batch_meta_chunk(self):
+        """Example: Split KVBatchMeta into multiple chunks."""
+        kv_meta = KVBatchMeta(
+            keys=[f"key{i}" for i in range(10)],
+            tags=[{"idx": i} for i in range(10)],
+            partition_id="partition_0",
+            fields=["field1"],
+            extra_info={"test": "value"},
+        )
+
+        chunks = kv_meta.chunk(3)
+
+        assert len(chunks) == 3
+        assert len(chunks[0]) == 4  # First chunk gets extra element
+        assert len(chunks[1]) == 3
+        assert len(chunks[2]) == 3
+
+        # Verify partition_id and fields are preserved
+        assert chunks[0].partition_id == "partition_0"
+        assert chunks[0].fields == ["field1"]
+        assert chunks[0].extra_info == {"test": "value"}
+
+        # Verify keys and tags are correctly chunked
+        assert chunks[0].keys == ["key0", "key1", "key2", "key3"]
+        assert chunks[0].tags == [{"idx": 0}, {"idx": 1}, {"idx": 2}, {"idx": 3}]
+        assert chunks[1].keys == ["key4", "key5", "key6"]
+        assert chunks[1].tags == [{"idx": 4}, {"idx": 5}, {"idx": 6}]
+
+    def test_kv_batch_meta_chunk_with_more_chunks_than_samples(self):
+        """Example: Chunking when chunks > samples produces empty chunks."""
+        kv_meta = KVBatchMeta(
+            keys=["key1", "key2"],
+            tags=[{"idx": 0}, {"idx": 1}],
+        )
+
+        chunks = kv_meta.chunk(5)
+
+        assert len(chunks) == 5
+        assert len(chunks[0]) == 1
+        assert len(chunks[1]) == 1
+        assert len(chunks[2]) == 0
+        assert len(chunks[3]) == 0
+        assert len(chunks[4]) == 0
+
+    def test_kv_batch_meta_concat(self):
+        """Example: Concatenate multiple KVBatchMeta chunks."""
+        kv_meta1 = KVBatchMeta(
+            keys=["key0", "key1"],
+            tags=[{"idx": 0}, {"idx": 1}],
+            partition_id="partition_0",
+            fields=["field1"],
+            extra_info={"test": "value1"},
+        )
+
+        kv_meta2 = KVBatchMeta(
+            keys=["key2", "key3"],
+            tags=[{"idx": 2}, {"idx": 3}],
+            partition_id="partition_0",
+            fields=["field1"],
+            extra_info={"test": "value2"},
+        )
+
+        result = KVBatchMeta.concat([kv_meta1, kv_meta2])
+
+        assert result.size == 4
+        assert result.keys == ["key0", "key1", "key2", "key3"]
+        assert result.tags == [{"idx": 0}, {"idx": 1}, {"idx": 2}, {"idx": 3}]
+        assert result.partition_id == "partition_0"
+        assert result.fields == ["field1"]
+
+    def test_kv_batch_meta_concat_with_empty_chunks(self):
+        """Example: Concat handles empty KVBatchMeta chunks gracefully."""
+        kv_meta1 = KVBatchMeta()
+        kv_meta2 = KVBatchMeta(keys=["key0"], tags=[{"idx": 0}])
+        kv_meta3 = KVBatchMeta()
+
+        result = KVBatchMeta.concat([kv_meta1, kv_meta2, kv_meta3])
+
+        assert result.size == 1
+        assert result.keys == ["key0"]
+        assert result.tags == [{"idx": 0}]
+
+    def test_kv_batch_meta_concat_validation_field_mismatch(self):
+        """Example: Concat validation catches field name mismatches."""
+        kv_meta1 = KVBatchMeta(
+            keys=["key0"],
+            tags=[{}],
+            fields=["field1"],
+        )
+        kv_meta2 = KVBatchMeta(
+            keys=["key1"],
+            tags=[{}],
+            fields=["field2"],  # Different field
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            KVBatchMeta.concat([kv_meta1, kv_meta2])
+        assert "Field names do not match" in str(exc_info.value)
+
+    def test_kv_batch_meta_concat_validation_partition_mismatch(self):
+        """Example: Concat validation catches partition_id mismatches."""
+        kv_meta1 = KVBatchMeta(
+            keys=["key0"],
+            tags=[{}],
+            partition_id="partition_0",
+        )
+        kv_meta2 = KVBatchMeta(
+            keys=["key1"],
+            tags=[{}],
+            partition_id="partition_1",  # Different partition
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            KVBatchMeta.concat([kv_meta1, kv_meta2])
+        assert "Partition do not match" in str(exc_info.value)
+
+    def test_kv_batch_meta_concat_empty_list(self):
+        """Example: Concat with empty list returns empty KVBatchMeta."""
+        result = KVBatchMeta.concat([])
+
+        assert result.size == 0
+        assert result.keys == []
+        assert result.tags == []
+
+    def test_kv_batch_meta_deepcopy_tags(self):
+        """Example: Tags are deep copied to prevent mutation."""
+        original_tags = [{"data": [1, 2, 3]}]
+        kv_meta = KVBatchMeta(
+            keys=["key1"],
+            tags=original_tags,
+        )
+
+        # Modify the tag in the KVBatchMeta
+        kv_meta.tags[0]["data"].append(4)
+
+        # Original should not be modified
+        assert original_tags[0]["data"] == [1, 2, 3]
+
+    def test_kv_batch_meta_deepcopy_extra_info(self):
+        """Example: Extra info is deep copied to prevent mutation."""
+        original_extra = {"nested": {"value": 1}}
+        kv_meta = KVBatchMeta(
+            keys=["key1"],
+            tags=[{}],
+            extra_info=original_extra,
+        )
+
+        # Modify extra_info
+        kv_meta.extra_info["nested"]["value"] = 999
+
+        # Original should not be modified
+        assert original_extra["nested"]["value"] == 1
