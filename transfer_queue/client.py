@@ -983,22 +983,31 @@ class AsyncTransferQueueClient:
     @dynamic_socket(socket_name="request_handle_socket")
     async def async_kv_list(
         self,
-        partition_id: str,
+        partition_id: Optional[str] = None,
         socket: Optional[zmq.asyncio.Socket] = None,
-    ) -> tuple[list[str], list[dict]]:
-        """Asynchronously retrieve keys and custom_meta from the controller for partition.
+    ) -> dict[str, dict[str, Any]]:
+        """Asynchronously retrieve keys and custom_meta from the controller for one or all partitions.
 
         Args:
-            partition_id: Partition to retrieve from the controller
+            partition_id: The specific partition_id to query.
+                If None (default), returns keys from all partitions.
             socket: ZMQ socket (injected by decorator)
 
         Returns:
-            keys: list of keys in the partition
-            custom_meta: list of dict for custom_meta
-        """
+            A nested dictionary mapping partition IDs to their keys and metadata.
 
-        if partition_id is None:
-            return [], []
+            Structure:
+            {
+                "partition_id": {
+                    "key_name": {
+                        "tag1": <value>,
+                        ... (other metadata)
+                    },
+                    ...,
+                },
+                ...
+            }
+        """
 
         request_msg = ZMQMessage.create(
             request_type=ZMQRequestType.KV_LIST,  # type: ignore[arg-type]
@@ -1019,9 +1028,8 @@ class AsyncTransferQueueClient:
             )
 
             if response_msg.request_type == ZMQRequestType.KV_LIST_RESPONSE:
-                keys = response_msg.body.get("keys", [])
-                custom_meta = response_msg.body.get("custom_meta", [])
-                return keys, custom_meta
+                partition_info = response_msg.body.get("partition_info", {})
+                return partition_info
             else:
                 raise RuntimeError(
                     f"[{self.client_id}]: Failed to list keys from controller {self._controller.id}: "
@@ -1474,16 +1482,29 @@ class TransferQueueClient(AsyncTransferQueueClient):
 
     def kv_list(
         self,
-        partition_id: str,
-    ) -> tuple[list[str], list[dict]]:
-        """Synchronously retrieve keys and custom_meta from the controller for partition.
+        partition_id: Optional[str] = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Synchronously retrieve keys and custom_meta from the controller for one or all partitions.
 
         Args:
-            partition_id: Partition to retrieve from the controller
+            partition_id: The specific partition_id to query.
+                If None (default), returns keys from all partitions.
+            socket: ZMQ socket (injected by decorator)
 
         Returns:
-            keys: list of keys in the partition
-            custom_meta: list of dict for custom_meta
+            A nested dictionary mapping partition IDs to their keys and metadata.
+
+            Structure:
+            {
+                "partition_id": {
+                    "key_name": {
+                        "tag1": <value>,
+                        ... (other metadata)
+                    },
+                    ...,
+                },
+                ...
+            }
         """
 
         return self._kv_list(partition_id=partition_id)

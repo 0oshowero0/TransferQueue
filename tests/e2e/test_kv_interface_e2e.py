@@ -69,7 +69,9 @@ def cleanup_partition(controller):
     """Cleanup partition after each test."""
     yield
     try:
-        ray.get(controller.clear_partition.remote("test_partition"))
+        partition_ids = ray.get(controller.list_partitions.remote())
+        for partition_id in partition_ids:
+            ray.get(controller.clear_partition.remote(partition_id))
     except Exception:
         pass
 
@@ -409,8 +411,8 @@ class TestKVGetE2E:
 class TestKVListE2E:
     """End-to-end tests for kv_list functionality."""
 
-    def test_kv_list_all_keys(self, controller):
-        """Test listing all keys in a partition."""
+    def test_kv_list_single_partition(self, controller):
+        """Test listing all keys and tags in single partition."""
         partition_id = "test_partition"
         keys = ["list_0", "list_1", "list_2"]
 
@@ -418,24 +420,81 @@ class TestKVListE2E:
             tq.kv_put(key=key, partition_id=partition_id, fields={"data": torch.tensor([[i]])}, tag={"id": i})
 
         # List all keys
-        listed_keys, tags = tq.kv_list(partition_id=partition_id)
+        partition_info = tq.kv_list(partition_id=partition_id)
 
-        assert len(listed_keys) == 3
+        assert len(partition_info.keys()) == 1
+        assert "test_partition" in partition_info.keys()
+        assert len(partition_info["test_partition"]) == 3
         for key in keys:
-            assert key in listed_keys
+            assert key in partition_info["test_partition"]
 
         # Verify tags match
-        for i, (key, tag) in enumerate(zip(listed_keys, tags, strict=False)):
+        for i, (key, tag) in enumerate(partition_info["test_partition"].items()):
             assert tag["id"] == i
+
+    def test_kv_list_all_partitions(self, controller):
+        """Test listing keys and tags in all partitions."""
+        partition_id = ["test_partition0", "test_partition1", "test_partition2"]
+
+        keys_partition0 = ["list_0", "list_1", "list_2"]
+        keys_partition1 = ["list_0", "list_1", "list_2"]  # deliberately set same keys
+        keys_partition2 = ["list_3", "list_4", "list_5", "list_6"]
+
+        fields_partition0 = TensorDict({"data": torch.tensor([[0], [1], [2]])}, batch_size=3)
+        fields_partition1 = TensorDict({"data": torch.tensor([[3], [4], [5]])}, batch_size=3)
+        fields_partition2 = TensorDict({"data": torch.tensor([[6], [7], [8], [9]])}, batch_size=4)
+
+        tags_partition0 = [{"id": i} for i in range(3)]
+        tags_partition1 = [{"id": i + 3} for i in range(3)]
+        tags_partition2 = [{"id": i + 6} for i in range(4)]
+
+        # Put to TQ
+        tq.kv_batch_put(
+            keys=keys_partition0, partition_id=partition_id[0], fields=fields_partition0, tags=tags_partition0
+        )
+        tq.kv_batch_put(
+            keys=keys_partition1, partition_id=partition_id[1], fields=fields_partition1, tags=tags_partition1
+        )
+        tq.kv_batch_put(
+            keys=keys_partition2, partition_id=partition_id[2], fields=fields_partition2, tags=tags_partition2
+        )
+
+        # List all keys
+        partition_info = tq.kv_list()
+
+        # Verify all partitions are exist
+        assert len(partition_info.keys()) == 3
+        assert "test_partition0" in partition_info.keys()
+        assert "test_partition1" in partition_info.keys()
+        assert "test_partition2" in partition_info.keys()
+
+        assert len(partition_info["test_partition0"]) == 3
+        for key in keys_partition0:
+            assert key in partition_info["test_partition0"]
+
+        assert len(partition_info["test_partition1"]) == 3
+        for key in keys_partition1:
+            assert key in partition_info["test_partition1"]
+
+        assert len(partition_info["test_partition2"]) == 4
+        for key in keys_partition2:
+            assert key in partition_info["test_partition2"]
+
+        # Verify tags match
+        for i, (key, tag) in enumerate(partition_info["test_partition0"].items()):
+            assert tag["id"] == i
+        for i, (key, tag) in enumerate(partition_info["test_partition1"].items()):
+            assert tag["id"] == i + 3
+        for i, (key, tag) in enumerate(partition_info["test_partition2"].items()):
+            assert tag["id"] == i + 6
 
     def test_kv_list_empty_partition(self):
         """Test listing empty partition."""
         partition_id = "test_partition_empty"
 
-        keys, tags = tq.kv_list(partition_id=partition_id)
+        partition_info = tq.kv_list(partition_id=partition_id)
 
-        assert len(keys) == 0
-        assert len(tags) == 0
+        assert len(partition_info) == 0
 
 
 class TestKVClearE2E:
@@ -454,9 +513,9 @@ class TestKVClearE2E:
         tq.kv_clear(keys=key, partition_id=partition_id)
 
         # Verify via kv_list
-        listed_keys, _ = tq.kv_list(partition_id=partition_id)
-        assert key not in listed_keys
-        assert other_key in listed_keys
+        partition_info = tq.kv_list(partition_id=partition_id)
+        assert key not in partition_info[partition_id]
+        assert other_key in partition_info[partition_id]
 
         # Verify via controller - key should be removed
         partition = get_controller_partition(controller, partition_id)
@@ -475,12 +534,12 @@ class TestKVClearE2E:
         tq.kv_clear(keys=keys[:2], partition_id=partition_id)
 
         # Verify
-        listed_keys, _ = tq.kv_list(partition_id=partition_id)
-        assert len(listed_keys) == 2
-        assert keys[0] not in listed_keys
-        assert keys[1] not in listed_keys
-        assert keys[2] in listed_keys
-        assert keys[3] in listed_keys
+        partition_info = tq.kv_list(partition_id=partition_id)
+        assert len(partition_info[partition_id]) == 2
+        assert keys[0] not in partition_info[partition_id]
+        assert keys[1] not in partition_info[partition_id]
+        assert keys[2] in partition_info[partition_id]
+        assert keys[3] in partition_info[partition_id]
 
 
 class TestKVE2ECornerCases:

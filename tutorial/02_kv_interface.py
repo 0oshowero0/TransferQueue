@@ -156,15 +156,17 @@ def demonstrate_kv_api():
     # Step 5: List all keys and tags in a partition
     print("\n[Step 5] Listing all keys and tags in partition...")
 
-    all_keys, all_tags = tq.kv_list(partition_id=partition_id)
-    print(f"  Found {len(all_keys)} keys in partition '{partition_id}':")
-    for k, t in zip(all_keys, all_tags, strict=False):
-        print(f"    - key='{k}' | tag={t}")
+    partition_info = tq.kv_list()
+    print(f"  Found {len(partition_info.keys())} partitions: '{list(partition_info.keys())}'")
+    for pid, keys_and_tags in partition_info.items():
+        for k, t in keys_and_tags.items():
+            print(f"Partition: {pid}, - key='{k}' | tag={t}")
 
     # Step 6: Retrieve specific fields using kv_batch_get
     print("\n[Step 6] Retrieving specific fields (Column) with kv_batch_get...")
     print("  Fetching only 'input_ids' to save bandwidth (ignoring 'attention_mask' and 'response').")
 
+    all_keys = list(partition_info[partition_id].keys())
     retrieved_input_ids = tq.kv_batch_get(keys=all_keys, partition_id=partition_id, fields="input_ids")
     print(f"  ✓ Successfully retrieved only {list(retrieved_input_ids.keys())} field for all samples.")
 
@@ -183,8 +185,8 @@ def demonstrate_kv_api():
     tq.kv_clear(keys=keys_to_clear, partition_id=partition_id)
     print(f"  ✓ Cleared keys: {keys_to_clear}")
 
-    remaining_keys, _ = tq.kv_list(partition_id=partition_id)
-    print(f"  Remaining keys in partition: {remaining_keys}")
+    partition_info_after_clear = tq.kv_list(partition_id=partition_id)
+    print(f"  Remaining keys in partition: {list(partition_info_after_clear[partition_id].keys())}")
 
 
 def main():

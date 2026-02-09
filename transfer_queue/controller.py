@@ -1843,22 +1843,30 @@ class TransferQueueController:
                 with perf_monitor.measure(op_type="KV_LIST"):
                     params = request_msg.body
                     partition_id = params["partition_id"]
-                    partition = self._get_partition(partition_id)
-                    if not partition:
-                        keys = []
-                        custom_meta = []
-                        message = f"Partition {partition_id} not found for kv_list."
-                        logger.debug(f"[{self.controller_id}]: {message}")
+                    if partition_id is None:
+                        partition_id = list(self.partitions.keys())
                     else:
-                        keys = list(partition.keys_mapping.keys())
-                        custom_meta = [partition.custom_meta.get(partition.keys_mapping[k], {}) for k in keys]
-                        message = "Success"
+                        partition_id = [partition_id]
+
+                    message = "success"
+                    partition_info = {}
+                    for pid in partition_id:
+                        partition = self._get_partition(pid)
+                        if partition:
+                            keys = list(partition.keys_mapping.keys())
+                            single_partition_info = {
+                                k: partition.custom_meta.get(partition.keys_mapping[k], {}) for k in keys
+                            }
+                            partition_info[pid] = single_partition_info
+                        else:
+                            # this only happens when params["partition_id"] is not None
+                            message = f"partition {pid} does not exist"
 
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.KV_LIST_RESPONSE,
                         sender_id=self.controller_id,
                         receiver_id=request_msg.sender_id,
-                        body={"keys": keys, "custom_meta": custom_meta, "message": message},
+                        body={"partition_info": partition_info, "message": message},
                     )
 
             self.request_handle_socket.send_multipart([identity, *response_msg.serialize()])

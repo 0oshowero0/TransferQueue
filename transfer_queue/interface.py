@@ -851,29 +851,45 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
     return data
 
 
-def kv_list(partition_id: str) -> tuple[list[str], list[dict[str, Any]]]:
-    """List all keys and their metadata in a partition.
+def kv_list(partition_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    """List all keys and their metadata in one or all partitions.
 
     Args:
-        partition_id: Partition to list keys from
+        partition_id: The specific partition_id to query.
+            If None (default), returns keys from all partitions.
 
     Returns:
-        Tuple of:
-        - List of keys in the partition
-        - List of custom metadata (tags) associated with each key
+        A nested dictionary mapping partition IDs to their keys and metadata.
+
+        Structure:
+        {
+            "partition_id": {
+                "key_name": {
+                    "tag1": <value>,
+                    ... (other metadata)
+                },
+                ...,
+            },
+            ...
+        }
 
     Example:
         >>> import transfer_queue as tq
         >>> tq.init()
-        >>> keys, tags = tq.kv_list(partition_id="train")
-        >>> print(f"Keys: {keys}")
-        >>> print(f"Tags: {tags}")
+        >>> # Case 1: Retrieve a specific partition
+        >>> partitions = tq.kv_list(partition_id="train")
+        >>> print(f"Keys: {list(partitions['train'].keys())}")
+        >>> print(f"Tags: {list(partitions['train'].values())}")
+        >>> # Case 2: Retrieve all partitions
+        >>> all_partitions = tq.kv_list()
+        >>> for pid, keys in all_partitions.items():
+        >>>     print(f"Partition: {pid}, Key count: {len(keys)}")
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    keys, custom_meta = tq_client.kv_list(partition_id)
+    partition_info = tq_client.kv_list(partition_id)
 
-    return keys, custom_meta
+    return partition_info
 
 
 def kv_clear(keys: list[str] | str, partition_id: str) -> None:
@@ -1096,29 +1112,46 @@ async def async_kv_batch_get(
     return data
 
 
-async def async_kv_list(partition_id: str) -> tuple[list[str], list[dict[str, Any]]]:
-    """Asynchronously list all keys and their metadata in a partition.
+async def async_kv_list(partition_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    """Asynchronously list all keys and their metadata in one or all partitions.
 
     Args:
-        partition_id: Partition to list keys from
+        partition_id: The specific partition_id to query.
+            If None (default), returns keys from all partitions.
 
     Returns:
-        Tuple of:
-        - List of keys in the partition
-        - List of custom metadata (tags) associated with each key
+        A nested dictionary mapping partition IDs to their keys and metadata.
+
+        Structure:
+        {
+            "partition_id": {
+                "key_name": {
+                    "tag1": <value>,
+                    ... (other metadata)
+                },
+                ...,
+            },
+            ...
+        }
+
 
     Example:
         >>> import transfer_queue as tq
         >>> tq.init()
-        >>> keys, tags = await tq.async_kv_list(partition_id="train")
-        >>> print(f"Keys: {keys}")
-        >>> print(f"Tags: {tags}")
+        >>> # Case 1: Retrieve a specific partition
+        >>> partitions = await tq.async_kv_list(partition_id="train")
+        >>> print(f"Keys: {list(partitions['train'].keys())}")
+        >>> print(f"Tags: {list(partitions['train'].values())}")
+        >>> # Case 2: Retrieve all partitions
+        >>> all_partitions = await tq.async_kv_list()
+        >>> for pid, keys in all_partitions.items():
+        >>>     print(f"Partition: {pid}, Key count: {len(keys)}")
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    keys, custom_meta = await tq_client.async_kv_list(partition_id)
+    partition_info = await tq_client.async_kv_list(partition_id)
 
-    return keys, custom_meta
+    return partition_info
 
 
 async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
