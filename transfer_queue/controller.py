@@ -988,19 +988,19 @@ class TransferQueueController:
 
     # ==================== Partition Index Management API ====================
 
-    def get_partition_index_range(self, partition: DataPartitionStatus) -> list[int]:
+    def get_partition_index_range(self, partition_id: str) -> list[int]:
         """
         Get all indexes for a specific partition.
 
         Args:
-            partition: Partition identifier
+            partition_id: Partition identifier
 
         Returns:
             List of indexes allocated to the partition
         """
         # Note: This includes the pre-allocated global_indexes for the partition.
         # i.e., partition.global_indexes + partition.pre_allocated_global_indexes
-        return self.index_manager.get_indexes_for_partition(partition)
+        return self.index_manager.get_indexes_for_partition(partition_id)
 
     # ==================== Data Production API ====================
 

@@ -812,7 +812,7 @@ class AsyncTransferQueueClient:
         task_name: Optional[str] = None,
         socket: Optional[zmq.asyncio.Socket] = None,
     ) -> bool:
-        """Aynchronously reset consumption status for a partition.
+        """Asynchronously reset consumption status for a partition.
 
         This allows the same data to be re-consumed, useful for debugging scenarios
         where the same rollout data needs to be trained multiple times.

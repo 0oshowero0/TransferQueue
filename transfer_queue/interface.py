@@ -701,7 +701,7 @@ def kv_put(
         ... )
     """
     if fields is None and tag is None:
-        raise ValueError("Please provide at least one parameter of fields or tag.")
+        raise ValueError("Please provide at least one parameter of `fields` or `tag`.")
 
     tq_client = _maybe_create_transferqueue_client()
 
@@ -712,7 +712,7 @@ def kv_put(
         raise RuntimeError(f"Retrieved BatchMeta size {batch_meta.size} does not match with input `key` size of 1!")
 
     # 2. register the user-specified tag to BatchMeta
-    if tag:
+    if tag is not None:
         batch_meta.update_custom_meta([tag])
 
     # 3. put data
@@ -1030,7 +1030,7 @@ async def async_kv_batch_put(
     """
 
     if fields is None and tags is None:
-        raise ValueError("Please provide at least one parameter of fields or tag.")
+        raise ValueError("Please provide at least one parameter of `fields` or `tags`.")
 
     if fields is not None and fields.batch_size[0] != len(keys):
         raise ValueError(
@@ -1049,7 +1049,7 @@ async def async_kv_batch_put(
         )
 
     # 2. register the user-specified tags to BatchMeta
-    if tags:
+    if tags is not None:
         if len(tags) != len(keys):
             raise ValueError(f"keys with length {len(keys)} does not match length of tags {len(tags)}")
         batch_meta.update_custom_meta(tags)
