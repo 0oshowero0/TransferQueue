@@ -846,10 +846,10 @@ class KVBatchMeta:
     partition_id: Optional[str] = None
 
     # [optional] fields of each sample
-    fields: list[str] = dataclasses.field(default_factory=list)
+    fields: Optional[list[str]] = None
 
     # [optional] external information for batch-level information
-    extra_info: dict[str, Any] = dataclasses.field(default_factory=dict)
+    extra_info: Optional[dict[str, Any]] = None
 
     def __post_init__(self):
         """Validate all the variables"""
@@ -1008,22 +1008,31 @@ class KVBatchMeta:
             return KVBatchMeta()
 
         base_fields = data[0].fields
-        base_fields_set = set(base_fields)
+        if base_fields is not None:
+            base_fields_set = set(base_fields)
+        else:
+            base_fields_set = set()
+
         base_partition_id = data[0].partition_id
 
         all_keys = []
         all_tags = []
         all_extra_info = {}
         for chunk in data:
-            if set(chunk.fields) != base_fields_set:
+            if chunk.fields is not None and set(chunk.fields) != base_fields_set:
                 raise ValueError("Field names do not match for concatenation.")
             if chunk.partition_id != base_partition_id:
                 raise ValueError("Partition do not match for concatenation.")
 
             all_keys.extend(chunk.keys)
             all_tags.extend(chunk.tags)
-            all_extra_info.update(chunk.extra_info)
+            if chunk.extra_info is not None:
+                all_extra_info.update(chunk.extra_info)
 
         return KVBatchMeta(
-            keys=all_keys, tags=all_tags, partition_id=base_partition_id, fields=base_fields, extra_info=all_extra_info
+            keys=all_keys,
+            tags=all_tags,
+            partition_id=base_partition_id,
+            fields=base_fields,
+            extra_info=all_extra_info if all_extra_info else None,
         )
