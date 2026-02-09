@@ -107,6 +107,7 @@ def _init_from_existing() -> None:
         time.sleep(1)
 
 
+# ==================== Initialization API ====================
 def init(conf: Optional[DictConfig] = None) -> None:
     """Initialize the TransferQueue system.
 
@@ -196,439 +197,6 @@ def init(conf: Optional[DictConfig] = None) -> None:
     _maybe_create_transferqueue_client(final_conf)
 
 
-# ==================== Basic API ====================
-def get_meta(
-    data_fields: list[str],
-    batch_size: int,
-    partition_id: str,
-    mode: str = "fetch",
-    task_name: Optional[str] = None,
-    sampling_config: Optional[dict[str, Any]] = None,
-) -> BatchMeta:
-    """Synchronously fetch data metadata from the controller via ZMQ.
-
-    Args:
-        data_fields: List of data field names to retrieve metadata for
-        batch_size: Number of samples to request in the batch
-        partition_id: Current data partition id
-        mode: Data fetch mode. Options:
-            - 'fetch': Get ready data only
-            - 'force_fetch': Get data regardless of readiness (may return unready samples)
-            - 'insert': Internal usage - should not be used by users
-        task_name: Optional task name associated with the request
-        sampling_config: Optional sampling configuration for custom samplers.
-
-    Returns:
-        BatchMeta: Metadata object containing data structure, sample information, and readiness status
-
-    Raises:
-        RuntimeError: If communication fails or controller returns error response
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> # Example 1: Basic fetch metadata
-        >>> batch_meta = tq.get_meta(
-        ...     data_fields=["input_ids", "attention_mask"],
-        ...     batch_size=4,
-        ...     partition_id="train_0",
-        ...     mode="fetch",
-        ...     task_name="generate_sequences"
-        ... )
-        >>> print(batch_meta.is_ready)  # True if all samples ready
-        >>>
-        >>> # Example 2: Fetch with self-defined samplers (using GRPOGroupNSampler as an example)
-        >>> batch_meta = tq.get_meta(
-        ...     data_fields=["input_ids", "attention_mask"],
-        ...     batch_size=8,
-        ...     partition_id="train_0",
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ...     sampling_config={"n_samples_per_prompt": 4}
-        ... )
-        >>> print(batch_meta.is_ready)  # True if all samples ready
-        >>>
-        >>> # Example 3: Force fetch metadata (bypass production status check and Sampler,
-        >>> # so may include unready and already-consumed samples. No filtering by consumption status is applied.)
-        >>> batch_meta = tq.get_meta(
-        ...     partition_id="train_0",   # optional
-        ...     mode="force_fetch",
-        ... )
-        >>> print(batch_meta.is_ready)  # May be False if some samples not ready
-    """
-
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.get_meta(data_fields, batch_size, partition_id, mode, task_name, sampling_config)
-
-
-def set_custom_meta(metadata: BatchMeta) -> None:
-    """Synchronously send custom metadata to the controller.
-
-    This method sends per-sample custom metadata (custom_meta) to the controller.
-    The custom_meta is stored in the controller and can be retrieved along with
-    the BatchMeta in subsequent get_meta calls.
-
-    Args:
-        metadata: BatchMeta containing the samples and their custom metadata to store.
-                 The custom_meta should be set using BatchMeta.update_custom_meta()
-                 before calling this method.
-
-    Raises:
-        RuntimeError: If communication fails or controller returns error response
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> # Create batch with custom metadata
-        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=2, ...)
-        >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
-        >>> tq.set_custom_meta(batch_meta)
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.set_custom_meta(metadata)
-
-
-def put(data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None) -> BatchMeta:
-    """Synchronously write data to storage units based on metadata.
-
-    If metadata is not provided, it will be created automatically using insert mode
-    with the provided data fields and partition_id.
-
-    During put, the custom_meta in metadata will update the corresponding custom_meta in
-    TransferQueue Controller.
-
-    Note:
-        When using multiple workers for distributed execution, there may be data
-        ordering inconsistencies between workers during put operations.
-
-    Args:
-        data: Data to write as TensorDict
-        metadata: Records the metadata of a batch of data samples, containing index and
-                  storage unit information. If None, metadata will be auto-generated.
-        partition_id: Target data partition id (required if metadata is not provided)
-
-    Returns:
-        BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
-                   metadata; will be updated in a future version to reflect the post-put state)
-
-    Raises:
-        ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
-        RuntimeError: If storage operation fails
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> batch_size = 4
-        >>> seq_len = 16
-        >>> current_partition_id = "train_0"
-        >>> # Example 1: Normal usage with existing metadata
-        >>> batch_meta = tq.get_meta(
-        ...     data_fields=["prompts", "attention_mask"],
-        ...     batch_size=batch_size,
-        ...     partition_id=current_partition_id,
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ... )
-        >>> batch = tq.get_data(batch_meta)
-        >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
-        >>> tq.put(data=output, metadata=batch_meta)
-        >>>
-        >>> # Example 2: Initial data insertion without pre-existing metadata
-        >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
-        >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
-        >>> # without metadata.
-        >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
-        >>> # interleave the initial data if n_sample > 1 before calling the async_put().
-        >>> original_prompts = torch.randn(batch_size, seq_len)
-        >>> n_samples = 4
-        >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
-        >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
-        >>> # This will create metadata in "insert" mode internally.
-        >>> metadata = tq.put(data=prompts_repeated_batch, partition_id=current_partition_id)
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.put(data, metadata, partition_id)
-
-
-def get_data(metadata: BatchMeta) -> TensorDict:
-    """Synchronously fetch data from storage units and organize into TensorDict.
-
-    Args:
-        metadata: Batch metadata containing data location information and global indexes
-
-    Returns:
-        TensorDict containing:
-            - Requested data fields (e.g., "prompts", "attention_mask")
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> batch_meta = tq.get_meta(
-        ...     data_fields=["prompts", "attention_mask"],
-        ...     batch_size=4,
-        ...     partition_id="train_0",
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ... )
-        >>> batch = tq.get_data(batch_meta)
-        >>> print(batch)
-        >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.get_data(metadata)
-
-
-def clear_partition(partition_id: str):
-    """Synchronously clear the whole partition from all storage units and the controller.
-
-    Args:
-        partition_id: The partition id to clear data for
-
-    Raises:
-        RuntimeError: If clear operation fails
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.clear_partition(partition_id)
-
-
-def clear_samples(metadata: BatchMeta):
-    """Synchronously clear specific samples from all storage units and the controller.
-
-    Args:
-        metadata: The BatchMeta of the corresponding data to be cleared
-
-    Raises:
-        RuntimeError: If clear operation fails
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return tq_client.clear_samples(metadata)
-
-
-async def async_get_meta(
-    data_fields: list[str],
-    batch_size: int,
-    partition_id: str,
-    mode: str = "fetch",
-    task_name: Optional[str] = None,
-    sampling_config: Optional[dict[str, Any]] = None,
-) -> BatchMeta:
-    """Asynchronously fetch data metadata from the controller via ZMQ.
-
-    Args:
-        data_fields: List of data field names to retrieve metadata for
-        batch_size: Number of samples to request in the batch
-        partition_id: Current data partition id
-        mode: Data fetch mode. Options:
-            - 'fetch': Get ready data only
-            - 'force_fetch': Get data regardless of readiness (may return unready samples)
-            - 'insert': Internal usage - should not be used by users
-        task_name: Optional task name associated with the request
-        sampling_config: Optional sampling configuration for custom samplers.
-
-    Returns:
-        BatchMeta: Metadata object containing data structure, sample information, and readiness status
-
-    Raises:
-        RuntimeError: If communication fails or controller returns error response
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> # Example 1: Basic fetch metadata
-        >>> batch_meta = asyncio.run(tq.async_get_meta(
-        ...     data_fields=["input_ids", "attention_mask"],
-        ...     batch_size=4,
-        ...     partition_id="train_0",
-        ...     mode="fetch",
-        ...     task_name="generate_sequences"
-        ... ))
-        >>> print(batch_meta.is_ready)  # True if all samples ready
-        >>>
-        >>> # Example 2: Fetch with self-defined samplers (using GRPOGroupNSampler as an example)
-        >>> batch_meta = asyncio.run(tq.async_get_meta(
-        ...     data_fields=["input_ids", "attention_mask"],
-        ...     batch_size=8,
-        ...     partition_id="train_0",
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ... ))
-        >>> print(batch_meta.is_ready)  # True if all samples ready
-        >>>
-        >>> # Example 3: Force fetch metadata (bypass production status check and Sampler,
-        >>> # so may include unready and already-consumed samples. No filtering by consumption status is applied.)
-        >>> batch_meta = asyncio.run(tq.async_get_meta(
-        ...     partition_id="train_0",   # optional
-        ...     mode="force_fetch",
-        ... ))
-        >>> print(batch_meta.is_ready)  # May be False if some samples not ready
-    """
-
-    tq_client = _maybe_create_transferqueue_client()
-    return await tq_client.async_get_meta(data_fields, batch_size, partition_id, mode, task_name, sampling_config)
-
-
-async def async_set_custom_meta(
-    metadata: BatchMeta,
-) -> None:
-    """
-    Asynchronously send custom metadata to the controller.
-
-    This method sends per-sample custom metadata (custom_meta) to the controller.
-    The custom_meta is stored in the controller and can be retrieved along with
-    the BatchMeta in subsequent get_meta calls.
-
-    Args:
-        metadata: BatchMeta containing the samples and their custom metadata to store.
-                 The custom_meta should be set using BatchMeta.update_custom_meta()
-                 before calling this method.
-        socket: ZMQ async socket for message transmission (injected by decorator)
-
-    Raises:
-        RuntimeError: If communication fails or controller returns error response
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> # Create batch with custom metadata
-        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=2, ...)
-        >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
-        >>> asyncio.run(tq.async_set_custom_meta(batch_meta))
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return await tq_client.async_set_custom_meta(metadata)
-
-
-async def async_put(
-    data: TensorDict,
-    metadata: Optional[BatchMeta] = None,
-    partition_id: Optional[str] = None,
-) -> BatchMeta:
-    """Asynchronously write data to storage units based on metadata.
-
-    If metadata is not provided, it will be created automatically using insert mode
-    with the provided data fields and partition_id.
-
-    During put, the custom_meta in metadata will update the corresponding custom_meta in
-    TransferQueue Controller.
-
-    Note:
-        When using multiple workers for distributed execution, there may be data
-        ordering inconsistencies between workers during put operations.
-
-    Args:
-        data: Data to write as TensorDict
-        metadata: Records the metadata of a batch of data samples, containing index and
-                  storage unit information. If None, metadata will be auto-generated.
-        partition_id: Target data partition id (required if metadata is not provided)
-
-    Returns:
-        BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
-                   metadata; will be updated in a future version to reflect the post-put state)
-
-    Raises:
-        ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
-        RuntimeError: If storage operation fails
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> batch_size = 4
-        >>> seq_len = 16
-        >>> current_partition_id = "train_0"
-        >>> # Example 1: Normal usage with existing metadata
-        >>> batch_meta = asyncio.run(tq.async_get_meta(
-        ...     data_fields=["prompts", "attention_mask"],
-        ...     batch_size=batch_size,
-        ...     partition_id=current_partition_id,
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ... ))
-        >>> batch = asyncio.run(tq.async_get_data(batch_meta))
-        >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
-        >>> asyncio.run(tq.async_put(data=output, metadata=batch_meta))
-        >>>
-        >>> # Example 2: Initial data insertion without pre-existing metadata
-        >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
-        >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
-        >>> # without metadata.
-        >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
-        >>> # interleave the initial data if n_sample > 1 before calling the async_put().
-        >>> original_prompts = torch.randn(batch_size, seq_len)
-        >>> n_samples = 4
-        >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
-        >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
-        >>> # This will create metadata in "insert" mode internally.
-        >>> metadata = asyncio.run(tq.async_put(data=prompts_repeated_batch, partition_id=current_partition_id))
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return await tq_client.async_put(data, metadata, partition_id)
-
-
-async def async_get_data(metadata: BatchMeta) -> TensorDict:
-    """Asynchronously fetch data from storage units and organize into TensorDict.
-
-    Args:
-        metadata: Batch metadata containing data location information and global indexes
-
-    Returns:
-        TensorDict containing:
-            - Requested data fields (e.g., "prompts", "attention_mask")
-
-    Example:
-        >>> import transfer_queue as tq
-        >>> tq.init()
-        >>>
-        >>> batch_meta = asyncio.run(tq.async_get_meta(
-        ...     data_fields=["prompts", "attention_mask"],
-        ...     batch_size=4,
-        ...     partition_id="train_0",
-        ...     mode="fetch",
-        ...     task_name="generate_sequences",
-        ... ))
-        >>> batch = asyncio.run(tq.async_get_data(batch_meta))
-        >>> print(batch)
-        >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return await tq_client.async_get_data(metadata)
-
-
-# ==================== Data Operations API ====================
-
-
-async def async_clear_samples(metadata: BatchMeta):
-    """Asynchronously clear specific samples from all storage units and the controller.
-
-    Args:
-        metadata: The BatchMeta of the corresponding data to be cleared
-
-    Raises:
-        RuntimeError: If clear operation fails
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return await tq_client.async_clear_samples(metadata)
-
-
-async def async_clear_partition(partition_id: str):
-    """Asynchronously clear the whole partition from all storage units and the controller.
-
-    Args:
-        partition_id: The partition id to clear data for
-
-    Raises:
-        RuntimeError: If clear operation fails
-    """
-    tq_client = _maybe_create_transferqueue_client()
-    return await tq_client.async_clear_partition(partition_id)
-
-
 def close():
     """Close the TransferQueue system.
 
@@ -662,7 +230,7 @@ def close():
         pass
 
 
-# ==================== KV Interface API ====================
+# ==================== High-Level KV Interface API ====================
 def kv_put(
     key: str,
     partition_id: str,
@@ -1181,3 +749,433 @@ async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
 
     if batch_meta.size > 0:
         await tq_client.async_clear_samples(batch_meta)
+
+
+# ==================== Low-Level Native API ====================
+def get_meta(
+    data_fields: list[str],
+    batch_size: int,
+    partition_id: str,
+    mode: str = "fetch",
+    task_name: Optional[str] = None,
+    sampling_config: Optional[dict[str, Any]] = None,
+) -> BatchMeta:
+    """Synchronously fetch data metadata from the controller via ZMQ.
+
+    Args:
+        data_fields: List of data field names to retrieve metadata for
+        batch_size: Number of samples to request in the batch
+        partition_id: Current data partition id
+        mode: Data fetch mode. Options:
+            - 'fetch': Get ready data only
+            - 'force_fetch': Get data regardless of readiness (may return unready samples)
+            - 'insert': Internal usage - should not be used by users
+        task_name: Optional task name associated with the request
+        sampling_config: Optional sampling configuration for custom samplers.
+
+    Returns:
+        BatchMeta: Metadata object containing data structure, sample information, and readiness status
+
+    Raises:
+        RuntimeError: If communication fails or controller returns error response
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> # Example 1: Basic fetch metadata
+        >>> batch_meta = tq.get_meta(
+        ...     data_fields=["input_ids", "attention_mask"],
+        ...     batch_size=4,
+        ...     partition_id="train_0",
+        ...     mode="fetch",
+        ...     task_name="generate_sequences"
+        ... )
+        >>> print(batch_meta.is_ready)  # True if all samples ready
+        >>>
+        >>> # Example 2: Fetch with self-defined samplers (using GRPOGroupNSampler as an example)
+        >>> batch_meta = tq.get_meta(
+        ...     data_fields=["input_ids", "attention_mask"],
+        ...     batch_size=8,
+        ...     partition_id="train_0",
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ...     sampling_config={"n_samples_per_prompt": 4}
+        ... )
+        >>> print(batch_meta.is_ready)  # True if all samples ready
+        >>>
+        >>> # Example 3: Force fetch metadata (bypass production status check and Sampler,
+        >>> # so may include unready and already-consumed samples. No filtering by consumption status is applied.)
+        >>> batch_meta = tq.get_meta(
+        ...     partition_id="train_0",   # optional
+        ...     mode="force_fetch",
+        ... )
+        >>> print(batch_meta.is_ready)  # May be False if some samples not ready
+    """
+
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.get_meta(data_fields, batch_size, partition_id, mode, task_name, sampling_config)
+
+
+def set_custom_meta(metadata: BatchMeta) -> None:
+    """Synchronously send custom metadata to the controller.
+
+    This method sends per-sample custom metadata (custom_meta) to the controller.
+    The custom_meta is stored in the controller and can be retrieved along with
+    the BatchMeta in subsequent get_meta calls.
+
+    Args:
+        metadata: BatchMeta containing the samples and their custom metadata to store.
+                 The custom_meta should be set using BatchMeta.update_custom_meta()
+                 before calling this method.
+
+    Raises:
+        RuntimeError: If communication fails or controller returns error response
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> # Create batch with custom metadata
+        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=2, ...)
+        >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
+        >>> tq.set_custom_meta(batch_meta)
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.set_custom_meta(metadata)
+
+
+def put(data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None) -> BatchMeta:
+    """Synchronously write data to storage units based on metadata.
+
+    If metadata is not provided, it will be created automatically using insert mode
+    with the provided data fields and partition_id.
+
+    During put, the custom_meta in metadata will update the corresponding custom_meta in
+    TransferQueue Controller.
+
+    Note:
+        When using multiple workers for distributed execution, there may be data
+        ordering inconsistencies between workers during put operations.
+
+    Args:
+        data: Data to write as TensorDict
+        metadata: Records the metadata of a batch of data samples, containing index and
+                  storage unit information. If None, metadata will be auto-generated.
+        partition_id: Target data partition id (required if metadata is not provided)
+
+    Returns:
+        BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
+                   metadata; will be updated in a future version to reflect the post-put state)
+
+    Raises:
+        ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
+        RuntimeError: If storage operation fails
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> batch_size = 4
+        >>> seq_len = 16
+        >>> current_partition_id = "train_0"
+        >>> # Example 1: Normal usage with existing metadata
+        >>> batch_meta = tq.get_meta(
+        ...     data_fields=["prompts", "attention_mask"],
+        ...     batch_size=batch_size,
+        ...     partition_id=current_partition_id,
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ... )
+        >>> batch = tq.get_data(batch_meta)
+        >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
+        >>> tq.put(data=output, metadata=batch_meta)
+        >>>
+        >>> # Example 2: Initial data insertion without pre-existing metadata
+        >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
+        >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
+        >>> # without metadata.
+        >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
+        >>> # interleave the initial data if n_sample > 1 before calling the async_put().
+        >>> original_prompts = torch.randn(batch_size, seq_len)
+        >>> n_samples = 4
+        >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
+        >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
+        >>> # This will create metadata in "insert" mode internally.
+        >>> metadata = tq.put(data=prompts_repeated_batch, partition_id=current_partition_id)
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.put(data, metadata, partition_id)
+
+
+def get_data(metadata: BatchMeta) -> TensorDict:
+    """Synchronously fetch data from storage units and organize into TensorDict.
+
+    Args:
+        metadata: Batch metadata containing data location information and global indexes
+
+    Returns:
+        TensorDict containing:
+            - Requested data fields (e.g., "prompts", "attention_mask")
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> batch_meta = tq.get_meta(
+        ...     data_fields=["prompts", "attention_mask"],
+        ...     batch_size=4,
+        ...     partition_id="train_0",
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ... )
+        >>> batch = tq.get_data(batch_meta)
+        >>> print(batch)
+        >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.get_data(metadata)
+
+
+def clear_partition(partition_id: str):
+    """Synchronously clear the whole partition from all storage units and the controller.
+
+    Args:
+        partition_id: The partition id to clear data for
+
+    Raises:
+        RuntimeError: If clear operation fails
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.clear_partition(partition_id)
+
+
+def clear_samples(metadata: BatchMeta):
+    """Synchronously clear specific samples from all storage units and the controller.
+
+    Args:
+        metadata: The BatchMeta of the corresponding data to be cleared
+
+    Raises:
+        RuntimeError: If clear operation fails
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return tq_client.clear_samples(metadata)
+
+
+async def async_get_meta(
+    data_fields: list[str],
+    batch_size: int,
+    partition_id: str,
+    mode: str = "fetch",
+    task_name: Optional[str] = None,
+    sampling_config: Optional[dict[str, Any]] = None,
+) -> BatchMeta:
+    """Asynchronously fetch data metadata from the controller via ZMQ.
+
+    Args:
+        data_fields: List of data field names to retrieve metadata for
+        batch_size: Number of samples to request in the batch
+        partition_id: Current data partition id
+        mode: Data fetch mode. Options:
+            - 'fetch': Get ready data only
+            - 'force_fetch': Get data regardless of readiness (may return unready samples)
+            - 'insert': Internal usage - should not be used by users
+        task_name: Optional task name associated with the request
+        sampling_config: Optional sampling configuration for custom samplers.
+
+    Returns:
+        BatchMeta: Metadata object containing data structure, sample information, and readiness status
+
+    Raises:
+        RuntimeError: If communication fails or controller returns error response
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> # Example 1: Basic fetch metadata
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
+        ...     data_fields=["input_ids", "attention_mask"],
+        ...     batch_size=4,
+        ...     partition_id="train_0",
+        ...     mode="fetch",
+        ...     task_name="generate_sequences"
+        ... ))
+        >>> print(batch_meta.is_ready)  # True if all samples ready
+        >>>
+        >>> # Example 2: Fetch with self-defined samplers (using GRPOGroupNSampler as an example)
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
+        ...     data_fields=["input_ids", "attention_mask"],
+        ...     batch_size=8,
+        ...     partition_id="train_0",
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ... ))
+        >>> print(batch_meta.is_ready)  # True if all samples ready
+        >>>
+        >>> # Example 3: Force fetch metadata (bypass production status check and Sampler,
+        >>> # so may include unready and already-consumed samples. No filtering by consumption status is applied.)
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
+        ...     partition_id="train_0",   # optional
+        ...     mode="force_fetch",
+        ... ))
+        >>> print(batch_meta.is_ready)  # May be False if some samples not ready
+    """
+
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_get_meta(data_fields, batch_size, partition_id, mode, task_name, sampling_config)
+
+
+async def async_set_custom_meta(
+    metadata: BatchMeta,
+) -> None:
+    """
+    Asynchronously send custom metadata to the controller.
+
+    This method sends per-sample custom metadata (custom_meta) to the controller.
+    The custom_meta is stored in the controller and can be retrieved along with
+    the BatchMeta in subsequent get_meta calls.
+
+    Args:
+        metadata: BatchMeta containing the samples and their custom metadata to store.
+                 The custom_meta should be set using BatchMeta.update_custom_meta()
+                 before calling this method.
+        socket: ZMQ async socket for message transmission (injected by decorator)
+
+    Raises:
+        RuntimeError: If communication fails or controller returns error response
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> # Create batch with custom metadata
+        >>> batch_meta = tq.get_meta(data_fields=["input_ids"], batch_size=2, ...)
+        >>> batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
+        >>> asyncio.run(tq.async_set_custom_meta(batch_meta))
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_set_custom_meta(metadata)
+
+
+async def async_put(
+    data: TensorDict,
+    metadata: Optional[BatchMeta] = None,
+    partition_id: Optional[str] = None,
+) -> BatchMeta:
+    """Asynchronously write data to storage units based on metadata.
+
+    If metadata is not provided, it will be created automatically using insert mode
+    with the provided data fields and partition_id.
+
+    During put, the custom_meta in metadata will update the corresponding custom_meta in
+    TransferQueue Controller.
+
+    Note:
+        When using multiple workers for distributed execution, there may be data
+        ordering inconsistencies between workers during put operations.
+
+    Args:
+        data: Data to write as TensorDict
+        metadata: Records the metadata of a batch of data samples, containing index and
+                  storage unit information. If None, metadata will be auto-generated.
+        partition_id: Target data partition id (required if metadata is not provided)
+
+    Returns:
+        BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
+                   metadata; will be updated in a future version to reflect the post-put state)
+
+    Raises:
+        ValueError: If metadata is None or empty, or if partition_id is None when metadata is not provided
+        RuntimeError: If storage operation fails
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> batch_size = 4
+        >>> seq_len = 16
+        >>> current_partition_id = "train_0"
+        >>> # Example 1: Normal usage with existing metadata
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
+        ...     data_fields=["prompts", "attention_mask"],
+        ...     batch_size=batch_size,
+        ...     partition_id=current_partition_id,
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ... ))
+        >>> batch = asyncio.run(tq.async_get_data(batch_meta))
+        >>> output = TensorDict({"response": torch.randn(batch_size, seq_len)})
+        >>> asyncio.run(tq.async_put(data=output, metadata=batch_meta))
+        >>>
+        >>> # Example 2: Initial data insertion without pre-existing metadata
+        >>> # BE CAREFUL: this usage may overwrite any unconsumed data in the given partition_id!
+        >>> # Please make sure the corresponding partition_id is empty before calling the async_put()
+        >>> # without metadata.
+        >>> # Now we only support put all the data of the corresponding partition id in once. You should repeat with
+        >>> # interleave the initial data if n_sample > 1 before calling the async_put().
+        >>> original_prompts = torch.randn(batch_size, seq_len)
+        >>> n_samples = 4
+        >>> prompts_repeated = torch.repeat_interleave(original_prompts, n_samples, dim=0)
+        >>> prompts_repeated_batch = TensorDict({"prompts": prompts_repeated})
+        >>> # This will create metadata in "insert" mode internally.
+        >>> metadata = asyncio.run(tq.async_put(data=prompts_repeated_batch, partition_id=current_partition_id))
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_put(data, metadata, partition_id)
+
+
+async def async_get_data(metadata: BatchMeta) -> TensorDict:
+    """Asynchronously fetch data from storage units and organize into TensorDict.
+
+    Args:
+        metadata: Batch metadata containing data location information and global indexes
+
+    Returns:
+        TensorDict containing:
+            - Requested data fields (e.g., "prompts", "attention_mask")
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>>
+        >>> batch_meta = asyncio.run(tq.async_get_meta(
+        ...     data_fields=["prompts", "attention_mask"],
+        ...     batch_size=4,
+        ...     partition_id="train_0",
+        ...     mode="fetch",
+        ...     task_name="generate_sequences",
+        ... ))
+        >>> batch = asyncio.run(tq.async_get_data(batch_meta))
+        >>> print(batch)
+        >>> # TensorDict with fields "prompts", "attention_mask", and sample order matching metadata global_indexes
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_get_data(metadata)
+
+
+async def async_clear_samples(metadata: BatchMeta):
+    """Asynchronously clear specific samples from all storage units and the controller.
+
+    Args:
+        metadata: The BatchMeta of the corresponding data to be cleared
+
+    Raises:
+        RuntimeError: If clear operation fails
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_clear_samples(metadata)
+
+
+async def async_clear_partition(partition_id: str):
+    """Asynchronously clear the whole partition from all storage units and the controller.
+
+    Args:
+        partition_id: The partition id to clear data for
+
+    Raises:
+        RuntimeError: If clear operation fails
+    """
+    tq_client = _maybe_create_transferqueue_client()
+    return await tq_client.async_clear_partition(partition_id)
