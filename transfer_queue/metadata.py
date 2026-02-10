@@ -849,7 +849,7 @@ class KVBatchMeta:
     fields: Optional[list[str]] = None
 
     # [optional] external information for batch-level information
-    extra_info: Optional[dict[str, Any]] = None
+    extra_info: Optional[dict[str, Any]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
         """Validate all the variables"""
