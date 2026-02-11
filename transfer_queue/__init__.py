@@ -16,63 +16,64 @@
 import os
 
 from .client import TransferQueueClient
-from .controller import TransferQueueController
 from .dataloader import StreamingDataLoader, StreamingDataset
 from .interface import (
-    async_clear_partition,
-    async_clear_samples,
-    async_get_data,
-    async_get_meta,
-    async_put,
-    async_set_custom_meta,
-    clear_partition,
-    clear_samples,
+    async_kv_batch_get,
+    async_kv_batch_put,
+    async_kv_clear,
+    async_kv_list,
+    async_kv_put,
     close,
-    get_data,
-    get_meta,
+    get_client,
     init,
-    put,
-    set_custom_meta,
+    kv_batch_get,
+    kv_batch_put,
+    kv_clear,
+    kv_list,
+    kv_put,
 )
-from .metadata import BatchMeta
+from .metadata import BatchMeta, KVBatchMeta
 from .sampler import BaseSampler
 from .sampler.grpo_group_n_sampler import GRPOGroupNSampler
 from .sampler.rank_aware_sampler import RankAwareSampler
 from .sampler.sequential_sampler import SequentialSampler
-from .storage import SimpleStorageUnit
-from .utils.common import get_placement_group
-from .utils.zmq_utils import ZMQServerInfo, process_zmq_server_info
 
-__all__ = [
-    "init",
-    "get_meta",
-    "get_data",
-    "put",
-    "set_custom_meta",
-    "clear_samples",
-    "clear_partition",
-    "async_get_meta",
-    "async_get_data",
-    "async_put",
-    "async_set_custom_meta",
-    "async_clear_samples",
-    "async_clear_partition",
-    "close",
-] + [
-    "TransferQueueClient",
-    "StreamingDataset",
-    "StreamingDataLoader",
-    "BatchMeta",
-    "TransferQueueController",
-    "SimpleStorageUnit",
-    "ZMQServerInfo",
-    "process_zmq_server_info",
-    "get_placement_group",
-    "BaseSampler",
-    "GRPOGroupNSampler",
-    "SequentialSampler",
-    "RankAwareSampler",
-]
+__all__ = (
+    [
+        # High-Level KV Interface
+        "init",
+        "close",
+        "kv_put",
+        "kv_batch_put",
+        "kv_batch_get",
+        "kv_list",
+        "kv_clear",
+        "async_kv_put",
+        "async_kv_batch_put",
+        "async_kv_batch_get",
+        "async_kv_list",
+        "async_kv_clear",
+        "KVBatchMeta",
+    ]
+    + [
+        # High-Level StreamingDataLoader Interface
+        "StreamingDataset",
+        "StreamingDataLoader",
+    ]
+    + [
+        # Low-Level Native Interface
+        "get_client",
+        "BatchMeta",
+        "TransferQueueClient",
+    ]
+    + [
+        # Sampler
+        "BaseSampler",
+        "GRPOGroupNSampler",
+        "SequentialSampler",
+        "RankAwareSampler",
+    ]
+)
 
 version_folder = os.path.dirname(os.path.join(os.path.abspath(__file__)))
 

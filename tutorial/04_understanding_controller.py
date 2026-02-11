@@ -62,6 +62,8 @@ def demonstrate_partition_isolation():
 
     tq.init()
 
+    tq_client = tq.get_client()
+
     # Partition 1: Training data
     print("\n[Partition 1] Putting training data...")
     train_data = TensorDict(
@@ -71,7 +73,7 @@ def demonstrate_partition_isolation():
         },
         batch_size=2,
     )
-    tq.put(data=train_data, partition_id="train")
+    tq_client.put(data=train_data, partition_id="train")
     print("  ✓ Training data added to 'train' partition")
 
     # Partition 2: Validation data
@@ -83,23 +85,25 @@ def demonstrate_partition_isolation():
         },
         batch_size=2,
     )
-    tq.put(data=val_data, partition_id="val")
+    tq_client.put(data=val_data, partition_id="val")
     print("  ✓ Validation data added to 'val' partition")
 
     # Get from train partition
     print("\n[Retrieving from 'train' partition]")
-    train_meta = tq.get_meta(
+    train_meta = tq_client.get_meta(
         data_fields=["input_ids", "labels"], batch_size=2, partition_id="train", task_name="train_task"
     )
 
-    retrieved_train_data = tq.get_data(train_meta)
+    retrieved_train_data = tq_client.get_data(train_meta)
     print(f"  ✓ Got BatchMeta={train_meta} from partition 'train'")
     print(f"  ✓ Retrieved Data: input_ids={retrieved_train_data['input_ids']}, labels={retrieved_train_data['labels']}")
 
     # Get from val partition
     print("\n[Retrieving from 'val' partition]")
-    val_meta = tq.get_meta(data_fields=["input_ids", "labels"], batch_size=2, partition_id="val", task_name="val_task")
-    retrieved_val_data = tq.get_data(val_meta)
+    val_meta = tq_client.get_meta(
+        data_fields=["input_ids", "labels"], batch_size=2, partition_id="val", task_name="val_task"
+    )
+    retrieved_val_data = tq_client.get_data(val_meta)
     print(f"  ✓ Got BatchMeta={val_meta} from partition 'val'")
     print(f"  ✓ Retrieved Data: input_ids={retrieved_val_data['input_ids']}, labels={retrieved_val_data['labels']}")
 
@@ -107,8 +111,8 @@ def demonstrate_partition_isolation():
     print("  ✓ Data isolation: 'train' and 'val' partitions are completely independent")
 
     # Cleanup
-    tq.clear_partition(partition_id="train")
-    tq.clear_partition(partition_id="val")
+    tq_client.clear_partition(partition_id="train")
+    tq_client.clear_partition(partition_id="val")
     tq.close()
     ray.shutdown()
 
@@ -126,6 +130,8 @@ def demonstrate_dynamic_expansion():
 
     tq.init()
 
+    tq_client = tq.get_client()
+
     # Add first batch with 2 samples, 2 fields
     print("\n[Step 1] Adding initial data (2 samples, 2 fields)...")
     data1 = TensorDict(
@@ -135,7 +141,7 @@ def demonstrate_dynamic_expansion():
         },
         batch_size=2,
     )
-    meta1 = tq.put(data=data1, partition_id="dynamic")
+    meta1 = tq_client.put(data=data1, partition_id="dynamic")
     print("  ✓ Added 2 samples")
     print(f"  ✓ Got BatchMeta: {meta1} samples")
 
@@ -148,9 +154,9 @@ def demonstrate_dynamic_expansion():
         },
         batch_size=3,
     )
-    meta2 = tq.put(data=data2, partition_id="dynamic")
+    meta2 = tq_client.put(data=data2, partition_id="dynamic")
 
-    all_meta = tq.get_meta(
+    all_meta = tq_client.get_meta(
         data_fields=["field1", "field2"], batch_size=5, partition_id="dynamic", task_name="dynamic_task"
     )
     print("  ✓ Added 3 more samples (total: 5)")
@@ -165,7 +171,7 @@ def demonstrate_dynamic_expansion():
         },
         batch_size=2,
     )
-    meta3 = tq.put(data=data3, metadata=meta1)
+    meta3 = tq_client.put(data=data3, metadata=meta1)
     print("  ✓ Added 2 samples with new field 'field3'")
     print(f"  ✓ Got BatchMeta: {meta3} for newly put data with new field")
 
@@ -174,7 +180,7 @@ def demonstrate_dynamic_expansion():
     print("  ✓ Columns auto-expand: Can add new fields anytime")
 
     # Cleanup
-    tq.clear_partition(partition_id="dynamic")
+    tq_client.clear_partition(partition_id="dynamic")
     tq.close()
     ray.shutdown()
 
@@ -190,6 +196,8 @@ def demonstrate_default_consumption_sample_strategy():
 
     tq.init()
 
+    tq_client = tq.get_client()
+
     # Add 6 samples
     print("\n[Setup] Adding 6 samples...")
     all_data = TensorDict(
@@ -198,22 +206,22 @@ def demonstrate_default_consumption_sample_strategy():
         },
         batch_size=6,
     )
-    tq.put(data=all_data, partition_id="sampling")
+    tq_client.put(data=all_data, partition_id="sampling")
     print("  ✓ 6 samples added")
 
     # First get - should get samples 0,1,2
     print("\n[Task A, Get 1] Requesting 3 samples...")
-    meta1 = tq.get_meta(data_fields=["data"], batch_size=3, partition_id="sampling", task_name="A")
+    meta1 = tq_client.get_meta(data_fields=["data"], batch_size=3, partition_id="sampling", task_name="A")
     print(f"  ✓ Got samples: {meta1.global_indexes}")
 
     # Second get - should get samples 3,4,5 (no duplicates!)
     print("\n[Task A, Get 2] Requesting 3 more samples...")
-    meta2 = tq.get_meta(data_fields=["data"], batch_size=3, partition_id="sampling", task_name="A")
+    meta2 = tq_client.get_meta(data_fields=["data"], batch_size=3, partition_id="sampling", task_name="A")
     print(f"  ✓ Got samples: {meta2.global_indexes}")
 
     # Third get - should get samples 0,1
     print("\n[Task B, Get 1] Requesting 2 samples...")
-    meta3 = tq.get_meta(data_fields=["data"], batch_size=2, partition_id="sampling", task_name="B")
+    meta3 = tq_client.get_meta(data_fields=["data"], batch_size=2, partition_id="sampling", task_name="B")
     print(f"  ✓ Got samples: {meta3.global_indexes}")
 
     print("\n[Verification]")
@@ -224,7 +232,7 @@ def demonstrate_default_consumption_sample_strategy():
     print("  ✓ Third get (Task B): samples 0,1")
 
     # Cleanup
-    tq.clear_partition(partition_id="sampling")
+    tq_client.clear_partition(partition_id="sampling")
     tq.close()
     ray.shutdown()
 
@@ -235,7 +243,7 @@ def main():
     print(
         textwrap.dedent(
             """
-        TransferQueue Tutorial 3: Understanding TransferQueueController
+        TransferQueue Tutorial 4: Understanding TransferQueueController
 
         This script demonstrates TransferQueueController's key features:
 

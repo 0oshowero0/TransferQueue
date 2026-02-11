@@ -27,7 +27,7 @@ import zmq
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
-from transfer_queue import SimpleStorageUnit  # noqa: E402
+from transfer_queue.storage.simple_backend import SimpleStorageUnit  # noqa: E402
 from transfer_queue.utils.zmq_utils import ZMQMessage, ZMQRequestType  # noqa: E402
 
 

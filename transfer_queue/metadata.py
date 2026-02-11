@@ -303,60 +303,43 @@ class BatchMeta:
         """
         self.extra_info.clear()
 
-    def set_custom_meta(self, global_index: int, meta_dict: dict[str, Any]) -> None:
+    def get_all_custom_meta(self) -> list[dict[str, Any]]:
         """
-        Set custom_meta for a specific sample by global_index.
-
-        Custom metadata is user-defined per-sample metadata that can be stored
-        and retrieved along with the BatchMeta.
-
-        Args:
-            global_index: The global_index of the sample to set custom meta for
-            meta_dict: Dictionary containing custom metadata for the sample
-
-        Raises:
-            ValueError: If the key is not in global_indexes
-        """
-
-        if global_index not in self.global_indexes:
-            raise ValueError(f"key {global_index} not found in global_indexes {self.global_indexes}.")
-
-        self.custom_meta[global_index] = copy.deepcopy(meta_dict)
-
-    def get_all_custom_meta(self) -> dict[int, dict[str, Any]]:
-        """
-        Get all custom_meta as a dictionary.
+        Get all custom_meta as a list of dictionary.
 
         Returns:
-            A deep copy of the custom_meta dictionary
+            A deep copy of the custom_meta list
         """
-        return copy.deepcopy(self.custom_meta)
+        custom_meta = [self.custom_meta.get(i, {}) for i in self.global_indexes]
+        return copy.deepcopy(custom_meta)
 
-    def update_custom_meta(self, new_meta: dict[int, dict[str, Any]]):
+    def update_custom_meta(self, custom_meta: list[dict[str, Any]]):
         """
-        Update custom_meta with a dictionary of new metadata.
+        Update custom_meta with a list of dictionary of custom metadata.
 
         This method updates the custom_meta dictionary with the provided metadata.
         Existing keys will be overwritten with new values.
 
         Args:
-            new_meta: Dictionary of new metadata
+            custom_meta: list of custom_meta dictionary
 
         Raises:
-            ValueError: If any key in new_meta is not in global_indexes
+            ValueError: If the length of custom_meta cannot match the batch size
         """
 
-        if new_meta is None:
+        if custom_meta is None:
             return
 
-        non_exist_global_indexes = set(new_meta.keys()) - set(self.global_indexes)
-        if non_exist_global_indexes:
+        if len(custom_meta) != self.size:
             raise ValueError(
-                f"Trying to update custom_meta with non-exist global_indexes! {non_exist_global_indexes} "
-                f"do not exist in this batch."
+                f"The length of custom_meta list {len(custom_meta)} must match the batch size: {self.size}"
             )
 
-        self.custom_meta.update(new_meta)
+        custom_meta_dict: dict[int, dict[str, Any]] = {
+            self.global_indexes[i]: custom_meta[i] for i in range(len(custom_meta))
+        }
+
+        self.custom_meta.update(custom_meta_dict)
 
     def clear_custom_meta(self) -> None:
         """
@@ -846,3 +829,211 @@ def _extract_field_metas(tensor_dict: TensorDict, set_all_ready: bool = True) ->
     ]
 
     return all_fields
+
+
+# ==================== KV Interface Metadata ====================
+@dataclass
+class KVBatchMeta:
+    """Records the metadata for KV interface."""
+
+    # keys of each sample
+    keys: list[str] = dataclasses.field(default_factory=list)
+
+    # sample-level tags
+    tags: list[dict] = dataclasses.field(default_factory=list)
+
+    # [optional] partition_id of this batch
+    partition_id: Optional[str] = None
+
+    # [optional] fields of each sample
+    fields: Optional[list[str]] = None
+
+    # [optional] external information for batch-level information
+    extra_info: Optional[dict[str, Any]] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate all the variables"""
+        if len(self.keys) != len(self.tags):
+            raise ValueError(f"keys and tags must have same length, but got {len(self.keys)} and {len(self.tags)}")
+        if len(self.keys) != len(set(self.keys)):
+            raise ValueError("Got duplicated keys.")
+        if self.fields is not None:
+            if len(self.fields) != len(set(self.fields)):
+                raise ValueError("Got duplicated fields.")
+
+        # deepcopy to prevent unexpected behavior after chunk/concat
+        self.tags = copy.deepcopy(self.tags)
+        self.extra_info = copy.deepcopy(self.extra_info)
+
+        object.__setattr__(self, "_size", len(self.keys))
+
+    @property
+    def size(self) -> int:
+        """Return the number of samples in this batch"""
+        return getattr(self, "_size", 0)
+
+    def __len__(self) -> int:
+        """Return the number of samples in this batch."""
+        return len(self.keys)
+
+    def __str__(self):
+        return f"KVBatchMeta(size={self.size}, field_names={self.fields}, extra_info={self.extra_info})"
+
+    def select_keys(self, keys_to_select: list[str]) -> "KVBatchMeta":
+        """
+        Select specific keys from this batch.
+        This will construct a new KVBatchMeta instance containing only the specified keys.
+
+        Args:
+            keys_to_select (list[str]): List of keys to retain.
+
+        Returns:
+            KVBatchMeta: A new KVBatchMeta instance containing only the specified keys.
+
+        Raises:
+            ValueError: If duplicate keys exist in input param `keys_to_select`.
+            RuntimeError: If `keys_to_select` contains keys that do not exist in this batch.
+        """
+
+        if len(set(keys_to_select)) != len(keys_to_select):
+            raise ValueError("Contain duplicate keys.")
+
+        non_exist_keys = set(keys_to_select) - set(self.keys)
+        if len(non_exist_keys) > 0:
+            raise RuntimeError(f"Keys {non_exist_keys} not found in current batch.")
+
+        _keys_to_idx = {key: idx for idx, key in enumerate(self.keys)}
+
+        loc_idx = [_keys_to_idx[k] for k in keys_to_select]
+        tags = [self.tags[i] for i in loc_idx]
+
+        return KVBatchMeta(
+            keys=keys_to_select,
+            tags=tags,
+            partition_id=self.partition_id,
+            fields=self.fields,
+            extra_info=self.extra_info,
+        )
+
+    def reorder(self, indexes: list[int]):
+        """
+        Reorder the samples in this batch according to the specified indexes.
+
+        The operation is performed in-place.
+
+        Args:
+            indexes : list[int]
+                A list of integers specifying the new order of SampleMeta.
+
+        Raises:
+            ValueError: If the size of input `indexes` does not match with the batch size.
+            ValueError: If duplicate indexes exist in input param `indexes`.
+        """
+        if len(indexes) != self.size:
+            raise ValueError(
+                f"Attempted to reorder with indexes length {len(indexes)} that does not match "
+                f"the batch size {self.size}."
+            )
+
+        if len(set(indexes)) != len(indexes):
+            raise ValueError("Contain duplicate indexes.")
+
+        self.keys = [self.keys[i] for i in indexes]
+        self.tags = [self.tags[i] for i in indexes]
+
+    def chunk(self, chunks: int) -> list["KVBatchMeta"]:
+        """
+        Split this batch into smaller chunks.
+
+        Args:
+            chunks: number of chunks
+
+        Return:
+            List of smaller KVBatchMeta chunks
+        """
+
+        chunk_list = []
+        if self.size < chunks:
+            logger.warning(
+                f"Chunk size {chunks} > number of samples in this batch {self.size}, this will return some "
+                f"empty KVBatchMeta chunks."
+            )
+
+        # Calculate the base size and remainder of each chunk
+        base_size = self.size // chunks
+        remainder = self.size % chunks
+
+        start = 0
+        for i in range(chunks):
+            # Calculate the size of the current chunk(the first remainder chunk is 1 more than the base size)
+            current_chunk_size = base_size + 1 if i < remainder else base_size
+            end = start + current_chunk_size
+            chunk_keys = self.keys[start:end]
+            chunk_tags = self.tags[start:end]
+
+            chunk = KVBatchMeta(
+                keys=chunk_keys,
+                tags=chunk_tags,
+                partition_id=self.partition_id,
+                fields=self.fields,
+                extra_info=self.extra_info,
+            )
+            chunk_list.append(chunk)
+            start = end
+
+        return chunk_list
+
+    @classmethod
+    def concat(cls, data: list["KVBatchMeta"]) -> "KVBatchMeta":
+        """
+        Concatenate multiple KVBatchMeta chunks into one large batch.
+
+        Args:
+            data: List of KVBatchMeta chunks to concatenate
+
+        Returns:
+            Concatenated KVBatchMeta
+
+        Raises:
+            ValueError: If validation fails (e.g., field names do not match)
+        """
+        if not data:
+            logger.warning("Try to concat empty KVBatchMeta chunks. Returning empty KVBatchMeta.")
+            return KVBatchMeta()
+
+        # skip empty chunks
+        data = [chunk for chunk in data if chunk and chunk.size > 0]
+
+        if len(data) == 0:
+            logger.warning("No valid KVBatchMeta chunks to concatenate. Returning empty KVBatchMeta.")
+            return KVBatchMeta()
+
+        base_fields = data[0].fields
+        if base_fields is not None:
+            base_fields_set = set(base_fields)
+        else:
+            base_fields_set = set()
+
+        base_partition_id = data[0].partition_id
+
+        all_keys = []
+        all_tags = []
+        all_extra_info = {}
+        for chunk in data:
+            if chunk.fields is not None and set(chunk.fields) != base_fields_set:
+                raise ValueError("Field names do not match for concatenation.")
+            if chunk.partition_id != base_partition_id:
+                raise ValueError("Partition do not match for concatenation.")
+
+            all_keys.extend(chunk.keys)
+            all_tags.extend(chunk.tags)
+            if chunk.extra_info is not None:
+                all_extra_info.update(chunk.extra_info)
+
+        return KVBatchMeta(
+            keys=all_keys,
+            tags=all_tags,
+            partition_id=base_partition_id,
+            fields=base_fields,
+            extra_info=all_extra_info if all_extra_info else None,
+        )
