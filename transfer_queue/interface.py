@@ -419,16 +419,17 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
         current_fields = set(batch_meta.field_names)
 
         not_ready_fields = target_fields - current_fields
-        begin_polling_time = time.time()
+        begin_polling_time = time.monotonic()
         while not_ready_fields:
-            if time.time() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
+            if time.monotonic() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
                 raise RuntimeError(
-                    f"Timeout for kv_batch_get. Missing fields: {not_ready_fields}"
-                    f" after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds."
+                    f"Timeout for kv_batch_get. Missing fields: {list(sorted(not_ready_fields))} "
+                    f"after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds. "
+                    f"Extra info for debug: partition: {partition_id}, keys: {keys}"
                 )
 
-            logger.warning(
-                f"Fields {list(not_ready_fields)} are not ready yet! "
+            logger.info(
+                f"Fields {list(sorted(not_ready_fields))} are not ready yet! "
                 f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
             )
 
@@ -703,16 +704,17 @@ async def async_kv_batch_get(
         current_fields = set(batch_meta.field_names)
 
         not_ready_fields = target_fields - current_fields
-        begin_polling_time = time.time()
+        begin_polling_time = time.monotonic()
         while not_ready_fields:
-            if time.time() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
+            if time.monotonic() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
                 raise RuntimeError(
-                    f"Timeout for async_kv_batch_get. Missing fields: {not_ready_fields}"
-                    f" after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds."
+                    f"Timeout for async_kv_batch_get. Missing fields: {list(sorted(not_ready_fields))} "
+                    f"after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds. "
+                    f"Extra info for debug: partition: {partition_id}, keys: {keys}"
                 )
 
-            logger.warning(
-                f"Fields {list(not_ready_fields)} are not ready yet! "
+            logger.info(
+                f"Fields {list(sorted(not_ready_fields))} are not ready yet! "
                 f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
             )
 

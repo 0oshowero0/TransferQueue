@@ -1193,7 +1193,7 @@ class TransferQueueController:
             if batch_size is None:
                 raise ValueError("must provide batch_size in fetch mode")
 
-            start_time = time.time()
+            start_time = time.monotonic()
             while True:
                 # ready_for_consume_indexes: samples where all required fields are produced
                 # (production status is ready) and not yet consumed
@@ -1207,7 +1207,7 @@ class TransferQueueController:
                             f" Returning None due to polling mode."
                         )
                         return BatchMeta.empty()
-                    if time.time() - start_time > TQ_CONTROLLER_GET_METADATA_TIMEOUT:
+                    if time.monotonic() - start_time > TQ_CONTROLLER_GET_METADATA_TIMEOUT:
                         raise TimeoutError(
                             f"Timeout while waiting for sufficient data for task {task_name}. "
                             f"Required: {batch_size}, Available: {len(ready_for_consume_indexes)}"
