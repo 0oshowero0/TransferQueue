@@ -375,7 +375,7 @@ def kv_batch_put(
 
 
 def kv_batch_get(
-    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None, strict: bool = False
+    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None, wait_for_fields: bool = False
 ) -> TensorDict:
     """Get data from TransferQueue using user-specified keys.
 
@@ -385,7 +385,8 @@ def kv_batch_get(
         keys: Single key or list of keys to retrieve
         partition_id: Partition containing the keys
         fields: Optional field(s) to retrieve. If None, retrieves all fields
-        strict: If True, raises an error if specified fields do not exist
+        wait_for_fields: If True, enters a polling loop waiting for the specified fields
+            to become ready (up to a timeout). If False, directly return currently available data
 
     Returns:
         TensorDict with the requested data
@@ -418,7 +419,7 @@ def kv_batch_get(
         if isinstance(fields, str):
             fields = [fields]
 
-        if strict:
+        if wait_for_fields:
             target_fields = set(fields)
             current_fields = set(batch_meta.field_names)
             not_ready_fields = target_fields - current_fields
@@ -432,8 +433,8 @@ def kv_batch_get(
                     )
 
                 logger.warning(
-                    f"Try kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
-                    f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
+                    f"Requested metadata fields {list(sorted(not_ready_fields))} are not yet available; "
+                    f"retrying kv_batch_get in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
                 )
 
                 time.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
@@ -444,6 +445,7 @@ def kv_batch_get(
         batch_meta = batch_meta.select_fields(fields)
 
     if not batch_meta.is_ready:
+        # this is a double check that should not happen
         raise RuntimeError("Some fields are not ready in all the requested keys!")
 
     data = tq_client.get_data(batch_meta)
@@ -662,7 +664,7 @@ async def async_kv_batch_put(
 
 
 async def async_kv_batch_get(
-    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None, strict: bool = False
+    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None, wait_for_fields: bool = False
 ) -> TensorDict:
     """Asynchronously get data from TransferQueue using user-specified keys.
 
@@ -672,7 +674,8 @@ async def async_kv_batch_get(
         keys: Single key or list of keys to retrieve
         partition_id: Partition containing the keys
         fields: Optional field(s) to retrieve. If None, retrieves all fields
-        strict: If True, raises an error if specified fields do not exist
+        wait_for_fields: If True, enters a polling loop waiting for the specified fields
+            to become ready (up to a timeout). If False, directly return currently available data
 
     Returns:
         TensorDict with the requested data
@@ -705,7 +708,7 @@ async def async_kv_batch_get(
         if isinstance(fields, str):
             fields = [fields]
 
-        if strict:
+        if wait_for_fields:
             target_fields = set(fields)
             current_fields = set(batch_meta.field_names)
 
@@ -720,8 +723,8 @@ async def async_kv_batch_get(
                     )
 
                 logger.warning(
-                    f"Try async_kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
-                    f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
+                    f"Requested metadata fields {list(sorted(not_ready_fields))} are not ready! "
+                    f"retrying async_kv_batch_get in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
                 )
 
                 await asyncio.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
@@ -732,6 +735,7 @@ async def async_kv_batch_get(
         batch_meta = batch_meta.select_fields(fields)
 
     if not batch_meta.is_ready:
+        # this is a double check that should not happen
         raise RuntimeError("Some fields are not ready in all the requested keys!")
 
     data = await tq_client.async_get_data(batch_meta)
