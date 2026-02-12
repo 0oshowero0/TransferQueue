@@ -208,7 +208,7 @@ class DataPartitionStatus:
     # Production status tensor - dynamically expandable
     # Values: 0 = not produced, 1 = ready for consumption
 
-    production_status: Tensor = torch.zeros(TQ_PRE_ALLOC_SAMPLE_NUM, 1, dtype=torch.int8)
+    production_status: Tensor = field(default_factory=lambda: torch.zeros(TQ_PRE_ALLOC_SAMPLE_NUM, 1, dtype=torch.int8))
 
     # Consumption status per task - task_name -> consumption_tensor
     # Each tensor tracks which samples have been consumed by that task
