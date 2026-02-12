@@ -390,7 +390,7 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
     Raises:
         RuntimeError: If keys or partition are not found
         RuntimeError: If empty fields exist in any key (sample)
-        RuntimeError: If any user-specified fields are not retrived after TQ_KV_POLLING_METADATA_TIMEOUT
+        RuntimeError: If any user-specified fields are not retrieved after TQ_KV_POLLING_METADATA_TIMEOUT
 
     Example:
         >>> import transfer_queue as tq
@@ -675,7 +675,7 @@ async def async_kv_batch_get(
     Raises:
         RuntimeError: If keys or partition are not found
         RuntimeError: If empty fields exist in any key (sample)
-        RuntimeError: If any user-specified fields are not retrived after TQ_KV_POLLING_METADATA_TIMEOUT
+        RuntimeError: If any user-specified fields are not retrieved after TQ_KV_POLLING_METADATA_TIMEOUT
 
     Example:
         >>> import transfer_queue as tq
