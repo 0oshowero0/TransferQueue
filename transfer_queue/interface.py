@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import importlib.resources as pkg_resources
 import logging
 import math
@@ -39,6 +40,9 @@ logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 _TRANSFER_QUEUE_CLIENT: Any = None
 _TRANSFER_QUEUE_STORAGE: Any = None
+
+TQ_KV_POLLING_METADATA_TIMEOUT = int(os.environ.get("TQ_KV_POLLING_METADATA_TIMEOUT", 10))
+TQ_KV_POLLING_METADATA_CHECK_INTERVAL = float(os.environ.get("TQ_KV_POLLING_METADATA_CHECK_INTERVAL", 0.5))
 
 
 def _maybe_create_transferqueue_client(
@@ -386,6 +390,7 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
     Raises:
         RuntimeError: If keys or partition are not found
         RuntimeError: If empty fields exist in any key (sample)
+        RuntimeError: If any user-specified fields are not retrived after TQ_KV_POLLING_METADATA_TIMEOUT
 
     Example:
         >>> import transfer_queue as tq
@@ -409,6 +414,29 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
     if fields is not None:
         if isinstance(fields, str):
             fields = [fields]
+
+        target_fields = set(fields)
+        current_fields = set(batch_meta.field_names)
+
+        not_ready_fields = target_fields - current_fields
+        begin_polling_time = time.time()
+        while not_ready_fields:
+            if time.time() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
+                raise RuntimeError(
+                    f"Timeout for kv_batch_get. Missing fields: {not_ready_fields}"
+                    f" after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds."
+                )
+
+            logger.warning(
+                f"Fields {list(not_ready_fields)} are not ready yet! "
+                f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
+            )
+
+            time.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
+            batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+            current_fields = set(batch_meta.field_names)
+            not_ready_fields = target_fields - current_fields
+
         batch_meta = batch_meta.select_fields(fields)
 
     if not batch_meta.is_ready:
@@ -647,6 +675,7 @@ async def async_kv_batch_get(
     Raises:
         RuntimeError: If keys or partition are not found
         RuntimeError: If empty fields exist in any key (sample)
+        RuntimeError: If any user-specified fields are not retrived after TQ_KV_POLLING_METADATA_TIMEOUT
 
     Example:
         >>> import transfer_queue as tq
@@ -670,6 +699,28 @@ async def async_kv_batch_get(
     if fields is not None:
         if isinstance(fields, str):
             fields = [fields]
+        target_fields = set(fields)
+        current_fields = set(batch_meta.field_names)
+
+        not_ready_fields = target_fields - current_fields
+        begin_polling_time = time.time()
+        while not_ready_fields:
+            if time.time() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
+                raise RuntimeError(
+                    f"Timeout for async_kv_batch_get. Missing fields: {not_ready_fields}"
+                    f" after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds."
+                )
+
+            logger.warning(
+                f"Fields {list(not_ready_fields)} are not ready yet! "
+                f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
+            )
+
+            await asyncio.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
+            batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+            current_fields = set(batch_meta.field_names)
+            not_ready_fields = target_fields - current_fields
+
         batch_meta = batch_meta.select_fields(fields)
 
     if not batch_meta.is_ready:
