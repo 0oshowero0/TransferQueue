@@ -428,8 +428,8 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
                     f"Extra info for debug: partition: {partition_id}, keys: {keys}"
                 )
 
-            logger.info(
-                f"Fields {list(sorted(not_ready_fields))} are not ready yet! "
+            logger.warning(
+                f"Try kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
                 f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
             )
 
@@ -713,8 +713,8 @@ async def async_kv_batch_get(
                     f"Extra info for debug: partition: {partition_id}, keys: {keys}"
                 )
 
-            logger.info(
-                f"Fields {list(sorted(not_ready_fields))} are not ready yet! "
+            logger.warning(
+                f"Try async_kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
                 f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
             )
 
