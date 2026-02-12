@@ -396,7 +396,10 @@ class TestKVMixedFieldPolling:
 
             # This should poll until all fields are available and succeed
             result = interface.kv_batch_get(
-                keys="test_key", partition_id="test_partition", fields=["input_ids", "attention_mask", "response"]
+                keys="test_key",
+                partition_id="test_partition",
+                fields=["input_ids", "attention_mask", "response"],
+                strict=True,
             )
 
             # Verify we got all requested fields
@@ -430,7 +433,10 @@ class TestKVMixedFieldPolling:
 
             with pytest.raises(RuntimeError, match="Timeout for kv_batch_get"):
                 interface.kv_batch_get(
-                    keys="test_key", partition_id="test_partition", fields=["input_ids", "attention_mask", "response"]
+                    keys="test_key",
+                    partition_id="test_partition",
+                    fields=["input_ids", "attention_mask", "response"],
+                    strict=True,
                 )
 
         finally:
@@ -459,7 +465,10 @@ class TestAsyncKVMixedFieldPolling:
 
             # This should poll until all fields are available and succeed
             result = await interface.async_kv_batch_get(
-                keys="test_key", partition_id="test_partition", fields=["input_ids", "attention_mask", "response"]
+                keys="test_key",
+                partition_id="test_partition",
+                fields=["input_ids", "attention_mask", "response"],
+                strict=True,
             )
 
             # Verify we got all requested fields
@@ -487,7 +496,10 @@ class TestAsyncKVMixedFieldPolling:
 
             with pytest.raises(RuntimeError, match="Timeout for async_kv_batch_get"):
                 await interface.async_kv_batch_get(
-                    keys="test_key", partition_id="test_partition", fields=["input_ids", "attention_mask", "response"]
+                    keys="test_key",
+                    partition_id="test_partition",
+                    fields=["input_ids", "attention_mask", "response"],
+                    strict=True,
                 )
 
         finally:

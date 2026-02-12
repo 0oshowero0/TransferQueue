@@ -374,7 +374,9 @@ def kv_batch_put(
         tq_client.set_custom_meta(batch_meta)
 
 
-def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None) -> TensorDict:
+def kv_batch_get(
+    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None, strict: bool = False
+) -> TensorDict:
     """Get data from TransferQueue using user-specified keys.
 
     This is a convenience method for retrieving data using keys instead of indexes.
@@ -383,6 +385,7 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
         keys: Single key or list of keys to retrieve
         partition_id: Partition containing the keys
         fields: Optional field(s) to retrieve. If None, retrieves all fields
+        strict: If True, raises an error if specified fields do not exist
 
     Returns:
         TensorDict with the requested data
@@ -415,28 +418,28 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
         if isinstance(fields, str):
             fields = [fields]
 
-        target_fields = set(fields)
-        current_fields = set(batch_meta.field_names)
-
-        not_ready_fields = target_fields - current_fields
-        begin_polling_time = time.monotonic()
-        while not_ready_fields:
-            if time.monotonic() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
-                raise RuntimeError(
-                    f"Timeout for kv_batch_get. Missing fields: {list(sorted(not_ready_fields))} "
-                    f"after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds. "
-                    f"Extra info for debug: partition: {partition_id}, keys: {keys}"
-                )
-
-            logger.warning(
-                f"Try kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
-                f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
-            )
-
-            time.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
-            batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+        if strict:
+            target_fields = set(fields)
             current_fields = set(batch_meta.field_names)
             not_ready_fields = target_fields - current_fields
+            begin_polling_time = time.monotonic()
+            while not_ready_fields:
+                if time.monotonic() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
+                    raise RuntimeError(
+                        f"Timeout for kv_batch_get. Missing fields: {list(sorted(not_ready_fields))} "
+                        f"after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds. "
+                        f"Extra info for debug: partition: {partition_id}, keys: {keys}"
+                    )
+
+                logger.warning(
+                    f"Try kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
+                    f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
+                )
+
+                time.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
+                batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+                current_fields = set(batch_meta.field_names)
+                not_ready_fields = target_fields - current_fields
 
         batch_meta = batch_meta.select_fields(fields)
 
@@ -659,7 +662,7 @@ async def async_kv_batch_put(
 
 
 async def async_kv_batch_get(
-    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None
+    keys: list[str] | str, partition_id: str, fields: Optional[list[str] | str] = None, strict: bool = False
 ) -> TensorDict:
     """Asynchronously get data from TransferQueue using user-specified keys.
 
@@ -669,6 +672,7 @@ async def async_kv_batch_get(
         keys: Single key or list of keys to retrieve
         partition_id: Partition containing the keys
         fields: Optional field(s) to retrieve. If None, retrieves all fields
+        strict: If True, raises an error if specified fields do not exist
 
     Returns:
         TensorDict with the requested data
@@ -700,28 +704,30 @@ async def async_kv_batch_get(
     if fields is not None:
         if isinstance(fields, str):
             fields = [fields]
-        target_fields = set(fields)
-        current_fields = set(batch_meta.field_names)
 
-        not_ready_fields = target_fields - current_fields
-        begin_polling_time = time.monotonic()
-        while not_ready_fields:
-            if time.monotonic() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
-                raise RuntimeError(
-                    f"Timeout for async_kv_batch_get. Missing fields: {list(sorted(not_ready_fields))} "
-                    f"after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds. "
-                    f"Extra info for debug: partition: {partition_id}, keys: {keys}"
+        if strict:
+            target_fields = set(fields)
+            current_fields = set(batch_meta.field_names)
+
+            not_ready_fields = target_fields - current_fields
+            begin_polling_time = time.monotonic()
+            while not_ready_fields:
+                if time.monotonic() - begin_polling_time > TQ_KV_POLLING_METADATA_TIMEOUT:
+                    raise RuntimeError(
+                        f"Timeout for async_kv_batch_get. Missing fields: {list(sorted(not_ready_fields))} "
+                        f"after {TQ_KV_POLLING_METADATA_TIMEOUT} seconds. "
+                        f"Extra info for debug: partition: {partition_id}, keys: {keys}"
+                    )
+
+                logger.warning(
+                    f"Try async_kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
+                    f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
                 )
 
-            logger.warning(
-                f"Try async_kv_batch_get with fields {list(sorted(not_ready_fields))} are not ready! "
-                f"Retry in {TQ_KV_POLLING_METADATA_CHECK_INTERVAL} seconds."
-            )
-
-            await asyncio.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
-            batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
-            current_fields = set(batch_meta.field_names)
-            not_ready_fields = target_fields - current_fields
+                await asyncio.sleep(TQ_KV_POLLING_METADATA_CHECK_INTERVAL)
+                batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+                current_fields = set(batch_meta.field_names)
+                not_ready_fields = target_fields - current_fields
 
         batch_meta = batch_meta.select_fields(fields)
 
