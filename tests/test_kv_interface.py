@@ -399,7 +399,7 @@ class TestKVMixedFieldPolling:
                 keys="test_key",
                 partition_id="test_partition",
                 fields=["input_ids", "attention_mask", "response"],
-                strict=True,
+                wait_for_fields=True,
             )
 
             # Verify we got all requested fields
@@ -436,7 +436,7 @@ class TestKVMixedFieldPolling:
                     keys="test_key",
                     partition_id="test_partition",
                     fields=["input_ids", "attention_mask", "response"],
-                    strict=True,
+                    wait_for_fields=True,
                 )
 
         finally:
@@ -468,7 +468,7 @@ class TestAsyncKVMixedFieldPolling:
                 keys="test_key",
                 partition_id="test_partition",
                 fields=["input_ids", "attention_mask", "response"],
-                strict=True,
+                wait_for_fields=True,
             )
 
             # Verify we got all requested fields
@@ -499,7 +499,7 @@ class TestAsyncKVMixedFieldPolling:
                     keys="test_key",
                     partition_id="test_partition",
                     fields=["input_ids", "attention_mask", "response"],
-                    strict=True,
+                    wait_for_fields=True,
                 )
 
         finally:
