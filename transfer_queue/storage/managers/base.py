@@ -394,7 +394,14 @@ class KVStorageManager(TransferQueueStorageManager):
             list[Tensor]: Flattened list of tensors, e.g.,
                           [data[field_a][0], data[field_a][1], data[field_a][2], ..., data[field_b][0], ...]
         """
-        return [row_data for field in sorted(data.keys()) for row_data in data[field]]
+        results: list[Tensor] = []
+        for field in sorted(data.keys()):
+            field_data = data[field]
+            if isinstance(field_data, Tensor) and field_data.is_nested:
+                results.extend(field_data.unbind())
+            else:
+                results.extend(field_data)
+        return results
 
     @staticmethod
     def _shutdown_executor(thread_executor: Optional[ThreadPoolExecutor]) -> None:
