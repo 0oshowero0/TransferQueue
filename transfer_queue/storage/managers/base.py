@@ -394,8 +394,16 @@ class KVStorageManager(TransferQueueStorageManager):
             list[Tensor]: Flattened list of tensors, e.g.,
                           [data[field_a][0], data[field_a][1], data[field_a][2], ..., data[field_b][0], ...]
         """
-        # TODO: unbind jagged tensor first
-        return [row_data for field in sorted(data.keys()) for row_data in data[field]]
+        results: list[Tensor] = []
+        for field in sorted(data.keys()):
+            field_data = data[field]
+            # For jagged tensors, iterate over unbind() list (views, not copies)
+            # This is much faster than direct iteration over nested tensor
+            if isinstance(field_data, Tensor) and field_data.layout == torch.jagged:
+                results.extend(field_data.unbind())
+            else:
+                results.extend(field_data)
+        return results
 
     @staticmethod
     def _shutdown_executor(thread_executor: Optional[ThreadPoolExecutor]) -> None:
