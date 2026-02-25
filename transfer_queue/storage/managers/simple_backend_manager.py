@@ -447,7 +447,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
 
 def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: dict) -> dict[str, Any]:
-    """Filter batch-aligned data from a TensorDict using batch indexes from a StorageMetaGroup.
+    """Filter batch-aligned data from a dict using batch indexes from a StorageMetaGroup.
     This helper extracts a subset of items from each field in ``data`` according to the
     batch indexes stored in ``storage_meta_group``. The same indexes are applied to every
     field in the input dict so that the returned samples remain aligned across

@@ -397,9 +397,7 @@ class KVStorageManager(TransferQueueStorageManager):
         results: list[Tensor] = []
         for field in sorted(data.keys()):
             field_data = data[field]
-            # For jagged tensors, iterate over unbind() list (views, not copies)
-            # This is much faster than direct iteration over nested tensor
-            if isinstance(field_data, Tensor) and field_data.layout == torch.jagged:
+            if isinstance(field_data, Tensor) and field_data.is_nested:
                 results.extend(field_data.unbind())
             else:
                 results.extend(field_data)
