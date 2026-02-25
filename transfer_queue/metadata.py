@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 from tensordict.tensorclass import NonTensorData, NonTensorStack
+from torch import Tensor
 
 from transfer_queue.utils.enum_utils import ProductionStatus
 
@@ -815,6 +816,15 @@ def _extract_field_metas(tensor_dict: TensorDict, set_all_ready: bool = True) ->
 
     production_status = ProductionStatus.READY_FOR_CONSUME if set_all_ready else ProductionStatus.NOT_PRODUCED
 
+    # unbind nested tensor
+    results: dict = {}
+    for field in sorted(tensor_dict.keys()):
+        field_data = tensor_dict[field]
+        if isinstance(field_data, Tensor) and field_data.is_nested:
+            results[field] = field_data.unbind()
+        else:
+            results[field] = field_data
+
     all_fields = [
         {
             name: FieldMeta(
@@ -823,7 +833,8 @@ def _extract_field_metas(tensor_dict: TensorDict, set_all_ready: bool = True) ->
                 shape=getattr(value, "shape", None),
                 production_status=production_status,
             )
-            for name, value in tensor_dict[idx].items()
+            for name in results.keys()
+            for value in results[name][idx]
         }
         for idx in range(batch_size)
     ]

@@ -202,13 +202,11 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             metadata, self.global_index_storage_unit_mapping, self.global_index_local_index_mapping
         )
 
-        # unbind jagged tensor
+        # unbind nested tensor
         results: dict = {}
         for field in sorted(data.keys()):
             field_data = data[field]
-
-            # For jagged tensors, unbind() first to accelerate indexing process
-            if isinstance(field_data, Tensor) and field_data.layout == torch.jagged:
+            if isinstance(field_data, Tensor) and field_data.is_nested:
                 results[field] = field_data.unbind()
             else:
                 results[field] = field_data
