@@ -69,7 +69,7 @@ def demonstrate_partition_isolation():
     train_data = TensorDict(
         {
             "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
-            "labels": torch.tensor([0, 1]),
+            "labels": torch.tensor([[0], [1]]),
         },
         batch_size=2,
     )
@@ -81,7 +81,7 @@ def demonstrate_partition_isolation():
     val_data = TensorDict(
         {
             "input_ids": torch.tensor([[7, 8, 9], [10, 11, 12]]),
-            "labels": torch.tensor([2, 3]),
+            "labels": torch.tensor([[2], [3]]),
         },
         batch_size=2,
     )
