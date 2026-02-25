@@ -27,6 +27,7 @@ import torch
 import zmq
 from omegaconf import DictConfig
 from tensordict import NonTensorStack, TensorDict
+from torch import Tensor
 
 from transfer_queue.metadata import BatchMeta
 from transfer_queue.storage.managers.base import TransferQueueStorageManager
@@ -201,10 +202,23 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             metadata, self.global_index_storage_unit_mapping, self.global_index_local_index_mapping
         )
 
+        # unbind jagged tensor
+        results: dict = {}
+        for field in sorted(data.keys()):
+            field_data = data[field]
+
+            # For jagged tensors, unbind() first to accelerate indexing process
+            if isinstance(field_data, Tensor) and field_data.layout == torch.jagged:
+                results[field] = field_data.unbind()
+            else:
+                results[field] = field_data
+
         # send data to each storage unit
         tasks = [
             self._put_to_single_storage_unit(
-                meta_group.get_local_indexes(), _filter_storage_data(meta_group, data), target_storage_unit=storage_id
+                meta_group.get_local_indexes(),
+                _filter_storage_data(meta_group, results),
+                target_storage_unit=storage_id,
             )
             for storage_id, meta_group in storage_meta_groups.items()
         ]
@@ -221,8 +235,8 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             per_field_shapes[global_idx] = {}
 
         # For each field, extract dtype and shape for each sample
-        for field in data.keys():
-            for i, data_item in enumerate(data[field]):
+        for field in results.keys():
+            for i, data_item in enumerate(results[field]):
                 global_idx = metadata.global_indexes[i]
                 per_field_dtypes[global_idx][field] = data_item.dtype if hasattr(data_item, "dtype") else None
                 per_field_shapes[global_idx][field] = data_item.shape if hasattr(data_item, "shape") else None
@@ -234,7 +248,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         # notify controller that new data is ready
         await self.notify_data_update(
-            partition_id, list(data.keys()), metadata.global_indexes, per_field_dtypes, per_field_shapes
+            partition_id, list(results.keys()), metadata.global_indexes, per_field_dtypes, per_field_shapes
         )
 
     @dynamic_storage_manager_socket(socket_name="put_get_socket")
@@ -432,11 +446,11 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         super().close()
 
 
-def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: TensorDict) -> dict[str, Any]:
+def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: dict) -> dict[str, Any]:
     """Filter batch-aligned data from a TensorDict using batch indexes from a StorageMetaGroup.
     This helper extracts a subset of items from each field in ``data`` according to the
     batch indexes stored in ``storage_meta_group``. The same indexes are applied to every
-    field in the input ``TensorDict`` so that the returned samples remain aligned across
+    field in the input dict so that the returned samples remain aligned across
     fields.
 
     Args:
@@ -444,8 +458,8 @@ def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: TensorDict)
             a sequence of batch indexes via :meth:`get_batch_indexes`. Each index
             refers to a position along the batch dimension of the tensors stored
             in ``data``.
-        data: A :class:`tensordict.TensorDict` containing batched data fields. All
-            fields are expected to be indexable by the batch indexes returned by
+        data: A dict containing batched data fields. All fields are expected to
+            be indexable by the batch indexes returned by
             ``storage_meta_group.get_batch_indexes()``.
     Returns:
         dict[str, Any]: A dictionary mapping each field name in ``data`` to a list
@@ -462,15 +476,7 @@ def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: TensorDict)
 
     for fname in data.keys():
         field_data = data[fname]
-
-        # For nested tensors, itemgetter with multiple indexes is extremely slow
-        # because it requires repeated indexing operations. Unbinding first and then
-        # using itemgetter on the list is much faster
-        if isinstance(field_data, torch.Tensor) and field_data.layout == torch.jagged:
-            field_list = field_data.unbind()
-            result = itemgetter(*batch_indexes)(field_list)
-        else:
-            result = itemgetter(*batch_indexes)(field_data)
+        result = itemgetter(*batch_indexes)(field_data)
 
         if not isinstance(result, tuple):
             result = (result,)
