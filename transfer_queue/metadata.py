@@ -818,26 +818,24 @@ def _extract_field_metas(tensor_dict: TensorDict, set_all_ready: bool = True) ->
 
     # unbind nested tensor
     results: dict = {}
-    for field in sorted(tensor_dict.keys()):
+    for field in tensor_dict.keys():
         field_data = tensor_dict[field]
-        if isinstance(field_data, Tensor) and field_data.is_nested:
+        if batch_size > 1 and isinstance(field_data, Tensor) and field_data.is_nested:
             results[field] = field_data.unbind()
         else:
             results[field] = field_data
 
-    all_fields = [
-        {
-            name: FieldMeta(
-                name=name,
-                dtype=getattr(value, "dtype", None),
-                shape=getattr(value, "shape", None),
+    all_fields = []
+    for idx in range(batch_size):
+        dict_of_field_meta = {}
+        for field_name in results.keys():
+            dict_of_field_meta[field_name] = FieldMeta(
+                name=field_name,
+                dtype=getattr(results[field_name][idx], "dtype", None),
+                shape=getattr(results[field_name][idx], "shape", None),
                 production_status=production_status,
             )
-            for name in results.keys()
-            for value in results[name][idx]
-        }
-        for idx in range(batch_size)
-    ]
+        all_fields.append(dict_of_field_meta)
 
     return all_fields
 

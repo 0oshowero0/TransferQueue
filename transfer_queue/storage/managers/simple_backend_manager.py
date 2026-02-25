@@ -204,9 +204,9 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         # unbind nested tensor
         results: dict = {}
-        for field in sorted(data.keys()):
+        for field in data.keys():
             field_data = data[field]
-            if isinstance(field_data, Tensor) and field_data.is_nested:
+            if data.batch_size[0] > 1 and isinstance(field_data, Tensor) and field_data.is_nested:
                 results[field] = field_data.unbind()
             else:
                 results[field] = field_data
