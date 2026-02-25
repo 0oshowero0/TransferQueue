@@ -394,6 +394,7 @@ class KVStorageManager(TransferQueueStorageManager):
             list[Tensor]: Flattened list of tensors, e.g.,
                           [data[field_a][0], data[field_a][1], data[field_a][2], ..., data[field_b][0], ...]
         """
+        # TODO: unbind jagged tensor first
         return [row_data for field in sorted(data.keys()) for row_data in data[field]]
 
     @staticmethod

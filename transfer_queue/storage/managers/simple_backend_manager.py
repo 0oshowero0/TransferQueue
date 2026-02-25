@@ -461,7 +461,17 @@ def _filter_storage_data(storage_meta_group: StorageMetaGroup, data: TensorDict)
         return results
 
     for fname in data.keys():
-        result = itemgetter(*batch_indexes)(data[fname])
+        field_data = data[fname]
+
+        # For nested tensors, itemgetter with multiple indexes is extremely slow
+        # because it requires repeated indexing operations. Unbinding first and then
+        # using itemgetter on the list is much faster
+        if isinstance(field_data, torch.Tensor) and field_data.layout == torch.jagged:
+            field_list = field_data.unbind()
+            result = itemgetter(*batch_indexes)(field_list)
+        else:
+            result = itemgetter(*batch_indexes)(field_data)
+
         if not isinstance(result, tuple):
             result = (result,)
         results[fname] = list(result)
