@@ -170,7 +170,7 @@ class SimpleStorageUnit:
         zmq_server_info: ZMQ connection information for clients.
     """
 
-    def __init__(self, storage_unit_size: int, num_worker_threads: int = 4):
+    def __init__(self, storage_unit_size: int, num_worker_threads: int = 1):
         """Initialize a SimpleStorageUnit with the specified size.
 
         Args:
