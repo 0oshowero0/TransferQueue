@@ -74,6 +74,7 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
             # initialize SimpleStorageUnit
             num_data_storage_units = conf.backend.SimpleStorage.num_data_storage_units
             total_storage_size = conf.backend.SimpleStorage.total_storage_size
+            num_worker_threads = conf.backend.SimpleStorage.get("num_worker_threads", 4)
             storage_placement_group = get_placement_group(num_data_storage_units, num_cpus_per_actor=1)
 
             for storage_unit_rank in range(num_data_storage_units):
@@ -82,7 +83,10 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
                     placement_group_bundle_index=storage_unit_rank,
                     name=f"TransferQueueStorageUnit#{storage_unit_rank}",
                     lifetime="detached",
-                ).remote(storage_unit_size=math.ceil(total_storage_size / num_data_storage_units))
+                ).remote(
+                    storage_unit_size=math.ceil(total_storage_size / num_data_storage_units),
+                    num_worker_threads=num_worker_threads,
+                )
                 _TRANSFER_QUEUE_STORAGE[f"TransferQueueStorageUnit#{storage_unit_rank}"] = storage_node
                 logger.info(f"TransferQueueStorageUnit#{storage_unit_rank} has been created.")
 
