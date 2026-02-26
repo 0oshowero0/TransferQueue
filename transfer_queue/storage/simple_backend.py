@@ -292,7 +292,15 @@ class SimpleStorageUnit:
         perf_monitor = IntervalPerfMonitor(caller_name=f"{self.storage_unit_id}_worker_{worker_id}")
 
         while not self._shutdown_event.is_set():
-            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
+            try:
+                socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
+            except zmq.error.ContextTerminated:
+                # ZMQ context was terminated, exit gracefully
+                logger.info(f"[{self.storage_unit_id}]: worker {worker_id} stopped gracefully (Context Terminated)")
+                break
+            except Exception as e:
+                logger.warning(f"[{self.storage_unit_id}]: worker {worker_id} poll error: {e}")
+                continue
 
             if self._shutdown_event.is_set():
                 break
