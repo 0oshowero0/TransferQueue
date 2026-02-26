@@ -188,13 +188,10 @@ class SimpleStorageUnit:
         # Internal communication address for proxy and workers
         self._inproc_addr = f"inproc://simple_storage_workers_{self.storage_unit_id}"
 
-        # Lock to protect storage_data access across workers
-        self._data_lock = Lock()
-
         # Shutdown event for graceful termination
         self._shutdown_event = Event()
 
-        # Placeholder for proxy_thread and worker_threads
+        # Placeholder for zmq_context, proxy_thread and worker_threads
         self.zmq_context: Optional[zmq.Context] = None
         self.proxy_thread: Optional[Thread] = None
         self.worker_threads: list[Thread] = []
@@ -340,7 +337,10 @@ class SimpleStorageUnit:
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.PUT_GET_ERROR,
                         sender_id=self.storage_unit_id,
-                        body={"message": f"Worker {worker_id} occur error: {str(e)}."},
+                        body={
+                            "message": f"{self.storage_unit_id}, worker {worker_id} encountered error "
+                            f"during operation {operation}: {str(e)}."
+                        },
                     )
 
                 # Send response back with identity for routing
