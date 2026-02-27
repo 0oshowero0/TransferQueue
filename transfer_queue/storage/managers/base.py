@@ -28,6 +28,7 @@ from uuid import uuid4
 import ray
 import torch
 import zmq
+import zmq.asyncio
 from omegaconf import DictConfig
 from tensordict import NonTensorStack, TensorDict
 from torch import Tensor
@@ -65,10 +66,11 @@ class TransferQueueStorageManager(ABC):
         self.config = config
         self.controller_info = controller_info
 
-        self.data_status_update_socket: Optional[zmq.Socket[bytes]] = None
-        self.controller_handshake_socket: Optional[zmq.Socket[bytes]] = None
+        self.data_status_update_socket: Optional[zmq.asyncio.Socket] = None
+        # Handshake socket is sync (used only during initialization)
+        self.controller_handshake_socket: Optional[zmq.Socket] = None
 
-        self.zmq_context: Optional[zmq.Context[Any]] = None
+        self.zmq_context: Optional[zmq.asyncio.Context] = None
         self._connect_to_controller()
 
     def _connect_to_controller(self) -> None:
@@ -77,15 +79,28 @@ class TransferQueueStorageManager(ABC):
             raise ValueError(f"controller_info should be ZMQServerInfo, but got {type(self.controller_info)}")
 
         try:
-            # create zmq context
-            self.zmq_context = zmq.Context()
+            # Create a synchronous context for handshake (blocking operation)
+            sync_zmq_context = zmq.Context()
 
-            # create zmq sockets for handshake and data status update
+            # create zmq socket for handshake (sync, for initial connection)
             self.controller_handshake_socket = create_zmq_socket(
-                self.zmq_context,
+                sync_zmq_context,
                 zmq.DEALER,
                 identity=f"{self.storage_manager_id}-controller_handshake_socket-{uuid4().hex[:8]}".encode(),
             )
+
+            # do handshake with controller using sync socket
+            self._do_handshake_with_controller()
+
+            # Close the sync handshake socket and context after handshake
+            if self.controller_handshake_socket and not self.controller_handshake_socket.closed:
+                self.controller_handshake_socket.close(linger=0)
+            sync_zmq_context.term()
+
+            # Create async context for data update notifications (non-blocking)
+            self.zmq_context = zmq.asyncio.Context()
+
+            # create zmq async socket for data status update
             self.data_status_update_socket = create_zmq_socket(
                 self.zmq_context,
                 zmq.DEALER,
@@ -93,9 +108,6 @@ class TransferQueueStorageManager(ABC):
             )
             assert self.data_status_update_socket is not None, "data_status_update_socket is not properly initialized"
             self.data_status_update_socket.connect(self.controller_info.to_addr("data_status_update_socket"))
-
-            # do handshake with controller
-            self._do_handshake_with_controller()
 
         except Exception as e:
             logger.error(f"Failed to connect to controller: {e}")
@@ -210,20 +222,14 @@ class TransferQueueStorageManager(ABC):
             shapes: Per-field shapes for each field, in {global_index: {field: shape}} format.
             custom_backend_meta: Per-field custom_meta for each sample, in {global_index: {field: custom_meta}} format.
         """
-        # Create zmq poller for notifying data update information
-
         if not self.controller_info:
             logger.warning(f"No controller connected for storage manager {self.storage_manager_id}")
             return
 
-        # Create zmq poller for notifying data update information
-        poller = zmq.Poller()
         # Note: data_status_update_socket is already connected during initialization
         assert self.data_status_update_socket is not None, "data_status_update_socket is not properly initialized"
 
         try:
-            poller.register(self.data_status_update_socket, zmq.POLLIN)
-
             request_msg = ZMQMessage.create(
                 request_type=ZMQRequestType.NOTIFY_DATA_UPDATE,  # type: ignore[arg-type]
                 sender_id=self.storage_manager_id,
@@ -237,7 +243,7 @@ class TransferQueueStorageManager(ABC):
                 },
             ).serialize()
 
-            self.data_status_update_socket.send_multipart(request_msg)
+            await self.data_status_update_socket.send_multipart(request_msg)
             logger.debug(
                 f"[{self.storage_manager_id}]: Send data status update request "
                 f"from storage manager id #{self.storage_manager_id} "
@@ -254,20 +260,21 @@ class TransferQueueStorageManager(ABC):
                 },
             ).serialize()
 
-            self.data_status_update_socket.send_multipart(request_msg)
+            await self.data_status_update_socket.send_multipart(request_msg)
 
         # Make sure controller successfully receives data status update information.
+        # Use asyncio.wait_for with timeout instead of blocking poller
         response_received: bool = False
-        start_time = time.time()
+        timeout = TQ_DATA_UPDATE_RESPONSE_TIMEOUT
 
-        while (
-            not response_received  # Only one controller to get response from
-            and time.time() - start_time < TQ_DATA_UPDATE_RESPONSE_TIMEOUT
-        ):
-            socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
-
-            if self.data_status_update_socket in socks:
-                response_msg = ZMQMessage.deserialize(self.data_status_update_socket.recv_multipart())
+        while not response_received and timeout > 0:
+            try:
+                # Use asyncio.wait_for with polling interval for responsiveness
+                poll_interval = min(TQ_STORAGE_POLLER_TIMEOUT, timeout)
+                messages = await asyncio.wait_for(
+                    self.data_status_update_socket.recv_multipart(), timeout=poll_interval
+                )
+                response_msg = ZMQMessage.deserialize(messages)
 
                 if response_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE_ACK:
                     response_received = True
@@ -276,6 +283,14 @@ class TransferQueueStorageManager(ABC):
                         f"from controller id #{response_msg.sender_id} "
                         f"to storage manager id #{self.storage_manager_id} successfully."
                     )
+            except asyncio.TimeoutError:
+                # Timeout waiting for response, check if we should continue
+                timeout -= poll_interval
+                if timeout <= 0:
+                    break
+            except Exception as e:
+                logger.warning(f"[{self.storage_manager_id}]: Error receiving data status update response: {e}")
+                break
 
         if not response_received:
             logger.error(
