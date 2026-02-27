@@ -91,10 +91,14 @@ class TransferQueueStorageManager(ABC):
             # do handshake with controller using sync socket
             self._do_handshake_with_controller()
 
-            # Close the sync handshake socket and context after handshake
+            # close the sync handshake socket and context after handshake
             if self.controller_handshake_socket and not self.controller_handshake_socket.closed:
                 self.controller_handshake_socket.close(linger=0)
+                self.controller_handshake_socket = None
             sync_zmq_context.term()
+
+            # create async context for data status update
+            self.zmq_context = zmq.asyncio.Context()
 
         except Exception as e:
             logger.error(f"Failed to connect to controller: {e}")
@@ -214,10 +218,8 @@ class TransferQueueStorageManager(ABC):
             return
 
         # create dynamic socket
-        # TODO: use unified dynamic socket register
-        context = zmq.asyncio.Context()
         identity = f"{self.storage_manager_id}-data_update-{uuid4().hex[:8]}".encode()
-        sock = create_zmq_socket(context, zmq.DEALER, identity=identity)
+        sock = create_zmq_socket(self.zmq_context, zmq.DEALER, identity=identity)
 
         try:
             sock.connect(self.controller_info.to_addr("data_status_update_socket"))
@@ -283,7 +285,6 @@ class TransferQueueStorageManager(ABC):
                     sock.close(linger=0)
             except Exception:
                 pass
-            context.term()
 
     @abstractmethod
     async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
@@ -328,6 +329,9 @@ class TransferQueueStorageManager(ABC):
                     self.controller_handshake_socket.close(linger=0)
             except Exception as e:
                 logger.error(f"[{self.storage_manager_id}]: Error closing controller_handshake_socket: {str(e)}")
+
+        if self.zmq_context:
+            self.zmq_context.term()
 
     def __del__(self):
         """Destructor to ensure resources are cleaned up."""

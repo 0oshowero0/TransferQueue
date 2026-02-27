@@ -45,8 +45,7 @@ if not logger.hasHandlers():
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
     logger.addHandler(handler)
 
-TQ_SIMPLE_STORAGE_MANAGER_RECV_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_MANAGER_RECV_TIMEOUT", 200))  # seconds
-TQ_SIMPLE_STORAGE_MANAGER_SEND_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_MANAGER_SEND_TIMEOUT", 200))  # seconds
+TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_MANAGER_RECV_TIMEOUT", 200))  # seconds
 
 TQ_ZERO_COPY_SERIALIZATION = get_env_bool("TQ_ZERO_COPY_SERIALIZATION", default=False)
 
@@ -119,11 +118,12 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
     # TODO (TQStorage): Provide a general dynamic socket function for both Client & Storage @huazhong.
     @staticmethod
-    def dynamic_storage_manager_socket(socket_name: str):
+    def dynamic_storage_manager_socket(socket_name: str, timeout: int):
         """Decorator to auto-manage ZMQ sockets for Controller/Storage servers (create -> connect -> inject -> close).
 
         Args:
             socket_name (str): Port name (from server config) to use for ZMQ connection (e.g., "data_req_port").
+            timeout (float): Timeout in seconds for ZMQ connection (in seconds).
 
         Decorated Function Rules:
             1. Must be an async class method (needs `self`).
@@ -157,8 +157,8 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                 try:
                     sock.connect(address)
                     # Timeouts to avoid indefinite await on recv/send
-                    sock.setsockopt(zmq.RCVTIMEO, TQ_SIMPLE_STORAGE_MANAGER_RECV_TIMEOUT * 1000)
-                    sock.setsockopt(zmq.SNDTIMEO, TQ_SIMPLE_STORAGE_MANAGER_SEND_TIMEOUT * 1000)
+                    sock.setsockopt(zmq.RCVTIMEO, timeout * 1000)
+                    sock.setsockopt(zmq.SNDTIMEO, timeout * 1000)
                     logger.debug(
                         f"[{self.storage_manager_id}]: Connected to StorageUnit {server_info.id} at {address} "
                         f"with identity {identity.decode()}"
@@ -249,7 +249,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             partition_id, list(results.keys()), metadata.global_indexes, per_field_dtypes, per_field_shapes
         )
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket")
+    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT)
     async def _put_to_single_storage_unit(
         self,
         local_indexes: list[int],
@@ -348,7 +348,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         return TensorDict(tensor_data, batch_size=len(metadata))
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket")
+    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT)
     async def _get_from_single_storage_unit(
         self, storage_meta_group: StorageMetaGroup, target_storage_unit: str, socket: zmq.Socket = None
     ):
@@ -407,7 +407,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             if isinstance(result, Exception):
                 logger.error(f"[{self.storage_manager_id}]: Error in clear operation task {i}: {result}")
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket")
+    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT)
     async def _clear_single_storage_unit(self, local_indexes, target_storage_unit=None, socket=None):
         try:
             request_msg = ZMQMessage.create(
