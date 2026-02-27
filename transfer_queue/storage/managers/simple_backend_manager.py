@@ -45,7 +45,7 @@ if not logger.hasHandlers():
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
     logger.addHandler(handler)
 
-TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_MANAGER_RECV_TIMEOUT", 200))  # seconds
+TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT", 200))  # seconds
 
 TQ_ZERO_COPY_SERIALIZATION = get_env_bool("TQ_ZERO_COPY_SERIALIZATION", default=False)
 
@@ -249,7 +249,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             partition_id, list(results.keys()), metadata.global_indexes, per_field_dtypes, per_field_shapes
         )
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT)
+    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
     async def _put_to_single_storage_unit(
         self,
         local_indexes: list[int],
@@ -348,7 +348,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         return TensorDict(tensor_data, batch_size=len(metadata))
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT)
+    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
     async def _get_from_single_storage_unit(
         self, storage_meta_group: StorageMetaGroup, target_storage_unit: str, socket: zmq.Socket = None
     ):
@@ -407,7 +407,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             if isinstance(result, Exception):
                 logger.error(f"[{self.storage_manager_id}]: Error in clear operation task {i}: {result}")
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_MANAGER_COMM_TIMEOUT)
+    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
     async def _clear_single_storage_unit(self, local_indexes, target_storage_unit=None, socket=None):
         try:
             request_msg = ZMQMessage.create(
