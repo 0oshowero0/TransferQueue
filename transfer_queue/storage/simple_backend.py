@@ -183,6 +183,7 @@ class SimpleStorageUnit:
 
         # Placeholder for zmq_context, proxy_thread and worker_threads
         self.zmq_context: Optional[zmq.Context] = None
+        self.put_get_socket: Optional[zmq.Socket] = None
         self.proxy_thread: Optional[Thread] = None
         self.worker_thread: Optional[Thread] = None
 
@@ -197,6 +198,7 @@ class SimpleStorageUnit:
             self.worker_thread,
             self.proxy_thread,
             self.zmq_context,
+            self.put_get_socket,
         )
 
     def _init_zmq_socket(self) -> None:
@@ -450,12 +452,17 @@ class SimpleStorageUnit:
         worker_thread: Optional[Thread],
         proxy_thread: Optional[Thread],
         zmq_context: Optional[zmq.Context],
+        put_get_socket: Optional[zmq.Socket],
     ) -> None:
         """Clean up resources on garbage collection."""
         logger.info("Shutting down SimpleStorageUnit resources...")
 
         # Signal all threads to stop
         shutdown_event.set()
+
+        # Terminate put_get_socket
+        if put_get_socket:
+            put_get_socket.close(linger=0)
 
         # Terminate ZMQ context to unblock proxy and workers
         if zmq_context:
