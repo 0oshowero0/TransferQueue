@@ -269,7 +269,7 @@ class TransferQueueStorageManager(ABC):
                 logger.error(f"[{self.storage_manager_id}]: Did not receive data status update ACK.")
 
         except Exception as e:
-            # 发送错误通知
+            logger.error(f"[{self.storage_manager_id}]: Error during notify_data_update: {e}")
             try:
                 error_msg = ZMQMessage.create(
                     request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ERROR,
@@ -282,7 +282,7 @@ class TransferQueueStorageManager(ABC):
         finally:
             try:
                 if not sock.closed:
-                    sock.close(linger=0)
+                    sock.close(linger=-1)
             except Exception:
                 pass
 
