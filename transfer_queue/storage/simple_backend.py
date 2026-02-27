@@ -333,6 +333,7 @@ class SimpleStorageUnit:
                 worker_socket.send_multipart([identity] + response_msg.serialize(), copy=False)
 
         logger.info(f"[{self.storage_unit_id}]: worker stopped.")
+        poller.unregister(worker_socket)
         worker_socket.close(linger=0)
 
     def _handle_put(self, data_parts: ZMQMessage) -> ZMQMessage:
@@ -453,15 +454,15 @@ class SimpleStorageUnit:
         # Signal all threads to stop
         shutdown_event.set()
 
-        # Terminate ZMQ context to unblock proxy and workers
-        if zmq_context:
-            zmq_context.term()
-
         # Wait for threads to finish (with timeout)
         if worker_thread and worker_thread.is_alive():
             worker_thread.join(timeout=5)
         if proxy_thread and proxy_thread.is_alive():
             proxy_thread.join(timeout=5)
+
+        # Terminate ZMQ context to unblock proxy and workers
+        if zmq_context:
+            zmq_context.term()
 
         logger.info("SimpleStorageUnit resources shutdown complete.")
 
