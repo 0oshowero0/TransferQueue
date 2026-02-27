@@ -66,7 +66,6 @@ class TransferQueueStorageManager(ABC):
         self.config = config
         self.controller_info = controller_info
 
-        self.data_status_update_socket: Optional[zmq.asyncio.Socket] = None
         # Handshake socket is sync (used only during initialization)
         self.controller_handshake_socket: Optional[zmq.Socket] = None
 
@@ -96,18 +95,6 @@ class TransferQueueStorageManager(ABC):
             if self.controller_handshake_socket and not self.controller_handshake_socket.closed:
                 self.controller_handshake_socket.close(linger=0)
             sync_zmq_context.term()
-
-            # Create async context for data update notifications (non-blocking)
-            self.zmq_context = zmq.asyncio.Context()
-
-            # create zmq async socket for data status update
-            self.data_status_update_socket = create_zmq_socket(
-                self.zmq_context,
-                zmq.DEALER,
-                identity=f"{self.storage_manager_id}-data_status_update_socket-{uuid4().hex[:8]}".encode(),
-            )
-            assert self.data_status_update_socket is not None, "data_status_update_socket is not properly initialized"
-            self.data_status_update_socket.connect(self.controller_info.to_addr("data_status_update_socket"))
 
         except Exception as e:
             logger.error(f"Failed to connect to controller: {e}")
@@ -226,12 +213,17 @@ class TransferQueueStorageManager(ABC):
             logger.warning(f"No controller connected for storage manager {self.storage_manager_id}")
             return
 
-        # Note: data_status_update_socket is already connected during initialization
-        assert self.data_status_update_socket is not None, "data_status_update_socket is not properly initialized"
+        # create dynamic socket
+        # TODO: use unified dynamic socket register
+        context = zmq.asyncio.Context()
+        identity = f"{self.storage_manager_id}-data_update-{uuid4().hex[:8]}".encode()
+        sock = create_zmq_socket(context, zmq.DEALER, identity=identity)
 
         try:
+            sock.connect(self.controller_info.to_addr("data_status_update_socket"))
+
             request_msg = ZMQMessage.create(
-                request_type=ZMQRequestType.NOTIFY_DATA_UPDATE,  # type: ignore[arg-type]
+                request_type=ZMQRequestType.NOTIFY_DATA_UPDATE,
                 sender_id=self.storage_manager_id,
                 body={
                     "partition_id": partition_id,
@@ -243,60 +235,55 @@ class TransferQueueStorageManager(ABC):
                 },
             ).serialize()
 
-            await self.data_status_update_socket.send_multipart(request_msg)
+            await sock.send_multipart(request_msg)
             logger.debug(
                 f"[{self.storage_manager_id}]: Send data status update request "
                 f"from storage manager id #{self.storage_manager_id} "
                 f"to controller id #{self.controller_info.id} successfully."
             )
-        except Exception as e:
-            request_msg = ZMQMessage.create(
-                request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ERROR,  # type: ignore[arg-type]
-                sender_id=self.storage_manager_id,
-                body={
-                    "message": f"Failed to notify data status update information from "
-                    f"storage manager id #{self.storage_manager_id}, "
-                    f"detail error message: {str(e)}"
-                },
-            ).serialize()
 
-            await self.data_status_update_socket.send_multipart(request_msg)
+            response_received = False
+            timeout = TQ_DATA_UPDATE_RESPONSE_TIMEOUT
 
-        # Make sure controller successfully receives data status update information.
-        # Use asyncio.wait_for with timeout instead of blocking poller
-        response_received: bool = False
-        timeout = TQ_DATA_UPDATE_RESPONSE_TIMEOUT
+            while not response_received and timeout > 0:
+                try:
+                    poll_interval = min(TQ_STORAGE_POLLER_TIMEOUT, timeout)
+                    messages = await asyncio.wait_for(sock.recv_multipart(), timeout=poll_interval)
+                    response_msg = ZMQMessage.deserialize(messages)
 
-        while not response_received and timeout > 0:
-            try:
-                # Use asyncio.wait_for with polling interval for responsiveness
-                poll_interval = min(TQ_STORAGE_POLLER_TIMEOUT, timeout)
-                messages = await asyncio.wait_for(
-                    self.data_status_update_socket.recv_multipart(), timeout=poll_interval
-                )
-                response_msg = ZMQMessage.deserialize(messages)
-
-                if response_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE_ACK:
-                    response_received = True
-                    logger.debug(
-                        f"[{self.storage_manager_id}]: Get data status update ACK response "
-                        f"from controller id #{response_msg.sender_id} "
-                        f"to storage manager id #{self.storage_manager_id} successfully."
-                    )
-            except asyncio.TimeoutError:
-                # Timeout waiting for response, check if we should continue
-                timeout -= poll_interval
-                if timeout <= 0:
+                    if response_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE_ACK:
+                        response_received = True
+                        logger.debug(
+                            f"[{self.storage_manager_id}]: Get data status update ACK response "
+                            f"from controller id #{response_msg.sender_id} successfully."
+                        )
+                except asyncio.TimeoutError:
+                    timeout -= poll_interval
+                except Exception as e:
+                    logger.warning(f"[{self.storage_manager_id}]: Error receiving response: {e}")
                     break
-            except Exception as e:
-                logger.warning(f"[{self.storage_manager_id}]: Error receiving data status update response: {e}")
-                break
 
-        if not response_received:
-            logger.error(
-                f"[{self.storage_manager_id}]: Storage manager id #{self.storage_manager_id} "
-                f"did not receive data status update ACK response from controller."
-            )
+            if not response_received:
+                logger.error(f"[{self.storage_manager_id}]: Did not receive data status update ACK.")
+
+        except Exception as e:
+            # 发送错误通知
+            try:
+                error_msg = ZMQMessage.create(
+                    request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ERROR,
+                    sender_id=self.storage_manager_id,
+                    body={"message": f"Failed to notify: {str(e)}"},
+                ).serialize()
+                await sock.send_multipart(error_msg)
+            except Exception:
+                pass
+        finally:
+            try:
+                if not sock.closed:
+                    sock.close(linger=0)
+            except Exception:
+                pass
+            context.term()
 
     @abstractmethod
     async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
@@ -334,18 +321,13 @@ class TransferQueueStorageManager(ABC):
 
     def close(self) -> None:
         """Close all ZMQ sockets and context to prevent resource leaks."""
-        for sock in (self.controller_handshake_socket, self.data_status_update_socket):
+        # Close handshake socket if it exists
+        if self.controller_handshake_socket:
             try:
-                if sock and not sock.closed:
-                    sock.close(linger=0)
+                if not self.controller_handshake_socket.closed:
+                    self.controller_handshake_socket.close(linger=0)
             except Exception as e:
-                logger.error(f"[{self.storage_manager_id}]: Error closing socket {sock}: {str(e)}")
-
-        try:
-            if self.zmq_context:
-                self.zmq_context.term()
-        except Exception as e:
-            logger.error(f"[{self.storage_manager_id}]: Error terminating zmq_context: {str(e)}")
+                logger.error(f"[{self.storage_manager_id}]: Error closing controller_handshake_socket: {str(e)}")
 
     def __del__(self):
         """Destructor to ensure resources are cleaned up."""
