@@ -21,8 +21,6 @@ backend:
     total_storage_size: 100000
     # Number of distributed storage units for SimpleStorage backend
     num_data_storage_units: 2
-    # Number of worker threads in each SimpleStorageUnit
-    num_worker_threads: 1
     # ZMQ Server IP & Ports (automatically generated during init)
     zmq_info: null
 

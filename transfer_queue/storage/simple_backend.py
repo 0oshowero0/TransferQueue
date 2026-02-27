@@ -19,7 +19,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from operator import itemgetter
-from threading import Event, Lock, Thread
+from threading import Event, Thread
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -71,9 +71,6 @@ class StorageUnitData:
         # Maximum number of elements stored in storage unit
         self.storage_size = storage_size
 
-        # Lock to prevent race condition
-        self._lock = Lock()
-
     def get_data(self, fields: list[str], local_indexes: list[int]) -> dict[str, list]:
         """
         Get data from storage unit according to given fields and local_indexes.
@@ -115,11 +112,8 @@ class StorageUnitData:
         """
 
         for f, values in field_data.items():
-            # Double-checked locking for field initialization
             if f not in self.field_data:
-                with self._lock:
-                    if f not in self.field_data:
-                        self.field_data[f] = [None] * self.storage_size
+                self.field_data[f] = [None] * self.storage_size
 
             for i, idx in enumerate(local_indexes):
                 if idx < 0 or idx >= self.storage_size:
@@ -146,10 +140,9 @@ class StorageUnitData:
                 )
 
         # Clear data at specified local_indexes
-        with self._lock:
-            for f in self.field_data:
-                for idx in local_indexes:
-                    self.field_data[f][idx] = None
+        for f in self.field_data:
+            for idx in local_indexes:
+                self.field_data[f][idx] = None
 
 
 @ray.remote(num_cpus=1)
@@ -170,20 +163,16 @@ class SimpleStorageUnit:
         zmq_server_info: ZMQ connection information for clients.
     """
 
-    def __init__(self, storage_unit_size: int, num_worker_threads: int = 1):
+    def __init__(self, storage_unit_size: int):
         """Initialize a SimpleStorageUnit with the specified size.
 
         Args:
             storage_unit_size: Maximum number of elements that can be stored in this storage unit.
-            num_worker_threads: Number of worker threads for handling requests.
         """
         self.storage_unit_id = f"TQ_STORAGE_UNIT_{uuid4().hex[:8]}"
         self.storage_unit_size = storage_unit_size
 
         self.storage_data = StorageUnitData(self.storage_unit_size)
-
-        # Number of worker threads for handling requests
-        self.num_workers = num_worker_threads
 
         # Internal communication address for proxy and workers
         self._inproc_addr = f"inproc://simple_storage_workers_{self.storage_unit_id}"
@@ -194,7 +183,7 @@ class SimpleStorageUnit:
         # Placeholder for zmq_context, proxy_thread and worker_threads
         self.zmq_context: Optional[zmq.Context] = None
         self.proxy_thread: Optional[Thread] = None
-        self.worker_threads: list[Thread] = []
+        self.worker_thread: Optional[Thread] = None
 
         self._init_zmq_socket()
         self._start_process_put_get()
@@ -204,7 +193,7 @@ class SimpleStorageUnit:
             self,
             self._shutdown_resources,
             self._shutdown_event,
-            self.worker_threads,
+            self.worker_thread,
             self.proxy_thread,
             self.zmq_context,
         )
@@ -244,16 +233,13 @@ class SimpleStorageUnit:
     def _start_process_put_get(self) -> None:
         """Start worker threads and ZMQ proxy for handling requests."""
 
-        # Start worker threads
-        for i in range(self.num_workers):
-            worker_thread = Thread(
-                target=self._worker_routine,
-                args=(i,),
-                name=f"StorageUnitWorkerThread-{self.storage_unit_id}-{i}",
-                daemon=True,
-            )
-            worker_thread.start()
-            self.worker_threads.append(worker_thread)
+        # Start worker thread
+        self.worker_thread = Thread(
+            target=self._worker_routine,
+            name=f"StorageUnitWorkerThread-{self.storage_unit_id}",
+            daemon=True,
+        )
+        self.worker_thread.start()
 
         # Start proxy thread (ROUTER <-> DEALER)
         self.proxy_thread = Thread(
@@ -276,7 +262,7 @@ class SimpleStorageUnit:
             else:
                 logger.error(f"[{self.storage_unit_id}]: ZMQ Proxy unexpected error: {e}")
 
-    def _worker_routine(self, worker_id: int) -> None:
+    def _worker_routine(self) -> None:
         """Worker thread for processing requests."""
         # Each worker must have its own socket
         worker_socket = create_zmq_socket(self.zmq_context, zmq.DEALER)
@@ -285,18 +271,18 @@ class SimpleStorageUnit:
         poller = zmq.Poller()
         poller.register(worker_socket, zmq.POLLIN)
 
-        logger.info(f"[{self.storage_unit_id}]: worker {worker_id} started...")
-        perf_monitor = IntervalPerfMonitor(caller_name=f"{self.storage_unit_id}_worker_{worker_id}")
+        logger.info(f"[{self.storage_unit_id}]: worker thread started...")
+        perf_monitor = IntervalPerfMonitor(caller_name=f"{self.storage_unit_id}")
 
         while not self._shutdown_event.is_set():
             try:
                 socks = dict(poller.poll(TQ_STORAGE_POLLER_TIMEOUT * 1000))
             except zmq.error.ContextTerminated:
                 # ZMQ context was terminated, exit gracefully
-                logger.info(f"[{self.storage_unit_id}]: worker {worker_id} stopped gracefully (Context Terminated)")
+                logger.info(f"[{self.storage_unit_id}]: worker stopped gracefully (Context Terminated)")
                 break
             except Exception as e:
-                logger.warning(f"[{self.storage_unit_id}]: worker {worker_id} poll error: {e}")
+                logger.warning(f"[{self.storage_unit_id}]: worker poll error: {e}")
                 continue
 
             if self._shutdown_event.is_set():
@@ -312,7 +298,7 @@ class SimpleStorageUnit:
                 operation = request_msg.request_type
 
                 try:
-                    logger.debug(f"[{self.storage_unit_id}]: worker {worker_id} received operation: {operation}")
+                    logger.debug(f"[{self.storage_unit_id}]: worker received operation: {operation}")
 
                     # Process request
                     if operation == ZMQRequestType.PUT_DATA:
@@ -338,7 +324,7 @@ class SimpleStorageUnit:
                         request_type=ZMQRequestType.PUT_GET_ERROR,
                         sender_id=self.storage_unit_id,
                         body={
-                            "message": f"{self.storage_unit_id}, worker {worker_id} encountered error "
+                            "message": f"{self.storage_unit_id}, worker encountered error "
                             f"during operation {operation}: {str(e)}."
                         },
                     )
@@ -346,7 +332,7 @@ class SimpleStorageUnit:
                 # Send response back with identity for routing
                 worker_socket.send_multipart([identity] + response_msg.serialize(), copy=False)
 
-        logger.info(f"[{self.storage_unit_id}]: worker {worker_id} stopped.")
+        logger.info(f"[{self.storage_unit_id}]: worker stopped.")
         worker_socket.close(linger=0)
 
     def _handle_put(self, data_parts: ZMQMessage) -> ZMQMessage:
@@ -457,7 +443,7 @@ class SimpleStorageUnit:
     @staticmethod
     def _shutdown_resources(
         shutdown_event: Event,
-        worker_threads: list[Thread],
+        worker_thread: Optional[Thread],
         proxy_thread: Optional[Thread],
         zmq_context: Optional[zmq.Context],
     ) -> None:
@@ -472,9 +458,8 @@ class SimpleStorageUnit:
             zmq_context.term()
 
         # Wait for threads to finish (with timeout)
-        for thread in worker_threads:
-            if thread and thread.is_alive():
-                thread.join(timeout=5)
+        if worker_thread and worker_thread.is_alive():
+            worker_thread.join(timeout=5)
         if proxy_thread and proxy_thread.is_alive():
             proxy_thread.join(timeout=5)
 
