@@ -16,6 +16,7 @@
 import dataclasses
 import logging
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from operator import itemgetter
@@ -241,6 +242,8 @@ class SimpleStorageUnit:
         )
         self.worker_thread.start()
 
+        time.sleep(0.5)  # make sure worker thread is ready before zmq.proxy forwarding messages
+
         # Start proxy thread (ROUTER <-> DEALER)
         self.proxy_thread = Thread(
             target=self._proxy_routine,
@@ -454,15 +457,15 @@ class SimpleStorageUnit:
         # Signal all threads to stop
         shutdown_event.set()
 
+        # Terminate ZMQ context to unblock proxy and workers
+        if zmq_context:
+            zmq_context.term()
+
         # Wait for threads to finish (with timeout)
         if worker_thread and worker_thread.is_alive():
             worker_thread.join(timeout=5)
         if proxy_thread and proxy_thread.is_alive():
             proxy_thread.join(timeout=5)
-
-        # Terminate ZMQ context to unblock proxy and workers
-        if zmq_context:
-            zmq_context.term()
 
         logger.info("SimpleStorageUnit resources shutdown complete.")
 
