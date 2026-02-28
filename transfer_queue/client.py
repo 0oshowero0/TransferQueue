@@ -914,7 +914,7 @@ class AsyncTransferQueueClient:
 
     # ==================== KV Interface API ====================
     @dynamic_socket(socket_name="request_handle_socket")
-    async def async_kv_retrieve_keys(
+    async def async_kv_retrieve_meta(
         self,
         keys: list[str] | str,
         partition_id: str,
@@ -948,7 +948,7 @@ class AsyncTransferQueueClient:
             raise TypeError("Only string or list of strings are allowed as `keys`.")
 
         request_msg = ZMQMessage.create(
-            request_type=ZMQRequestType.KV_RETRIEVE_KEYS,  # type: ignore[arg-type]
+            request_type=ZMQRequestType.KV_RETRIEVE_META,  # type: ignore[arg-type]
             sender_id=self.client_id,
             receiver_id=self._controller.id,
             body={
@@ -968,7 +968,7 @@ class AsyncTransferQueueClient:
                 f"from controller {self._controller.id}"
             )
 
-            if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE:
+            if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_META_RESPONSE:
                 metadata = response_msg.body.get("metadata", BatchMeta.empty())
                 metadata = BatchMeta.from_dict(metadata) if isinstance(metadata, dict) else metadata
                 return metadata
@@ -981,7 +981,7 @@ class AsyncTransferQueueClient:
             raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_keys: {str(e)}") from e
 
     @dynamic_socket(socket_name="request_handle_socket")
-    async def async_kv_retrieve_indexes(
+    async def async_kv_retrieve_keys(
         self,
         global_indexes: list[int] | int,
         partition_id: str,
@@ -1014,7 +1014,7 @@ class AsyncTransferQueueClient:
             raise TypeError("Only int or list of int are allowed as `global_indexes`.")
 
         request_msg = ZMQMessage.create(
-            request_type=ZMQRequestType.KV_RETRIEVE_INDEXES,  # type: ignore[arg-type]
+            request_type=ZMQRequestType.KV_RETRIEVE_KEYS,  # type: ignore[arg-type]
             sender_id=self.client_id,
             receiver_id=self._controller.id,
             body={"global_indexes": global_indexes, "partition_id": partition_id},
@@ -1030,7 +1030,7 @@ class AsyncTransferQueueClient:
                 f"from controller {self._controller.id}"
             )
 
-            if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_INDEXES_RESPONSE:
+            if response_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE:
                 keys = response_msg.body.get("keys", [])
                 if len(keys) != len(global_indexes):
                     raise RuntimeError("Some global_indexes have no corresponding keys!")
@@ -1175,8 +1175,8 @@ class TransferQueueClient(AsyncTransferQueueClient):
         self._get_partition_list = _make_sync(self.async_get_partition_list)
         self._set_custom_meta = _make_sync(self.async_set_custom_meta)
         self._reset_consumption = _make_sync(self.async_reset_consumption)
+        self._kv_retrieve_meta = _make_sync(self.async_kv_retrieve_meta)
         self._kv_retrieve_keys = _make_sync(self.async_kv_retrieve_keys)
-        self._kv_retrieve_indexes = _make_sync(self.async_kv_retrieve_indexes)
         self._kv_list = _make_sync(self.async_kv_list)
 
     # ==================== Basic API ====================
@@ -1522,7 +1522,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
         return self._get_partition_list()
 
     # ==================== KV Interface API ====================
-    def kv_retrieve_keys(
+    def kv_retrieve_meta(
         self,
         keys: list[str] | str,
         partition_id: str,
@@ -1542,9 +1542,9 @@ class TransferQueueClient(AsyncTransferQueueClient):
             TypeError: If `keys` is not a list of string or a string
         """
 
-        return self._kv_retrieve_keys(keys=keys, partition_id=partition_id, create=create)
+        return self._kv_retrieve_meta(keys=keys, partition_id=partition_id, create=create)
 
-    def kv_retrieve_indexes(
+    def kv_retrieve_keys(
         self,
         global_indexes: list[int] | int,
         partition_id: str,
@@ -1554,7 +1554,6 @@ class TransferQueueClient(AsyncTransferQueueClient):
         Args:
             global_indexes: List of global_indexes to retrieve from the controller
             partition_id: The ID of the logical partition to search for global_indexes.
-            socket: ZMQ socket (injected by decorator)
 
         Returns:
             keys: list of keys of the corresponding global_indexes
@@ -1564,7 +1563,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
             RuntimeError: If some indexes in `global_indexes` do not have corresponding keys
         """
 
-        return self._kv_retrieve_indexes(global_indexes=global_indexes, partition_id=partition_id)
+        return self._kv_retrieve_keys(global_indexes=global_indexes, partition_id=partition_id)
 
     def kv_list(
         self,

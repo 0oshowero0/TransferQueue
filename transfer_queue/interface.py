@@ -288,7 +288,7 @@ def kv_put(
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = tq_client.kv_retrieve_keys(keys=[key], partition_id=partition_id, create=True)
+    batch_meta = tq_client.kv_retrieve_meta(keys=[key], partition_id=partition_id, create=True)
 
     if batch_meta.size != 1:
         raise RuntimeError(f"Retrieved BatchMeta size {batch_meta.size} does not match with input `key` size of 1!")
@@ -364,7 +364,7 @@ def kv_batch_put(
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=True)
+    batch_meta = tq_client.kv_retrieve_meta(keys=keys, partition_id=partition_id, create=True)
 
     if batch_meta.size != len(keys):
         raise RuntimeError(
@@ -416,7 +416,7 @@ def kv_batch_get(keys: list[str] | str, partition_id: str, fields: Optional[list
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+    batch_meta = tq_client.kv_retrieve_meta(keys=keys, partition_id=partition_id, create=False)
 
     if batch_meta.size == 0:
         raise RuntimeError("keys or partition were not found!")
@@ -497,7 +497,7 @@ def kv_clear(keys: list[str] | str, partition_id: str) -> None:
         keys = [keys]
 
     tq_client = _maybe_create_transferqueue_client()
-    batch_meta = tq_client.kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+    batch_meta = tq_client.kv_retrieve_meta(keys=keys, partition_id=partition_id, create=False)
 
     if batch_meta.size > 0:
         tq_client.clear_samples(batch_meta)
@@ -548,7 +548,7 @@ async def async_kv_put(
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = await tq_client.async_kv_retrieve_keys(keys=[key], partition_id=partition_id, create=True)
+    batch_meta = await tq_client.async_kv_retrieve_meta(keys=[key], partition_id=partition_id, create=True)
 
     if batch_meta.size != 1:
         raise RuntimeError(f"Retrieved BatchMeta size {batch_meta.size} does not match with input `key` size of 1!")
@@ -623,7 +623,7 @@ async def async_kv_batch_put(
     tq_client = _maybe_create_transferqueue_client()
 
     # 1. translate user-specified key to BatchMeta
-    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=True)
+    batch_meta = await tq_client.async_kv_retrieve_meta(keys=keys, partition_id=partition_id, create=True)
 
     if batch_meta.size != len(keys):
         raise RuntimeError(
@@ -677,7 +677,7 @@ async def async_kv_batch_get(
     """
     tq_client = _maybe_create_transferqueue_client()
 
-    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+    batch_meta = await tq_client.async_kv_retrieve_meta(keys=keys, partition_id=partition_id, create=False)
 
     if batch_meta.size == 0:
         raise RuntimeError("keys or partition were not found!")
@@ -759,7 +759,7 @@ async def async_kv_clear(keys: list[str] | str, partition_id: str) -> None:
         keys = [keys]
 
     tq_client = _maybe_create_transferqueue_client()
-    batch_meta = await tq_client.async_kv_retrieve_keys(keys=keys, partition_id=partition_id, create=False)
+    batch_meta = await tq_client.async_kv_retrieve_meta(keys=keys, partition_id=partition_id, create=False)
 
     if batch_meta.size > 0:
         await tq_client.async_clear_samples(batch_meta)
