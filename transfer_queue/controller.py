@@ -1523,7 +1523,7 @@ class TransferQueueController:
         )
         data_fields = []
         for fname, col_idx in partition.field_name_mapping.items():
-            if col_mask[col_idx]:
+            if col_idx < len(col_mask) and col_mask[col_idx]:
                 data_fields.append(fname)
 
         metadata = self.generate_batch_meta(partition_id, verified_global_indexes, data_fields, mode="force_fetch")
