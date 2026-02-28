@@ -1000,3 +1000,58 @@ class TestDataPartitionStatusKvInterface:
         global_indexes = partition.kv_retrieve_keys(["key_1", "key_3"])
 
         assert global_indexes == [10, 30]
+
+    def test_kv_retrieve_indexes_with_existing_indexes(self):
+        """Test kv_retrieve_indexes returns correct keys for existing global_indexes."""
+        from transfer_queue.controller import DataPartitionStatus
+
+        partition = DataPartitionStatus(partition_id="kv_test_partition")
+
+        # Simulate reverse mapping (key -> global_index)
+        partition.keys_mapping = {"key_a": 0, "key_b": 1, "key_c": 2}
+        # Build reverse mapping
+        partition.revert_keys_mapping = {0: "key_a", 1: "key_b", 2: "key_c"}
+
+        # Retrieve keys using global_indexes
+        keys = partition.kv_retrieve_indexes([0, 1, 2])
+
+        assert keys == ["key_a", "key_b", "key_c"]
+
+    def test_kv_retrieve_indexes_with_nonexistent_indexes(self):
+        """Test kv_retrieve_indexes returns None for global_indexes that don't exist."""
+        from transfer_queue.controller import DataPartitionStatus
+
+        partition = DataPartitionStatus(partition_id="kv_test_partition")
+
+        # Simulate some indexes being registered
+        partition.keys_mapping = {"existing_key": 5}
+        partition.revert_keys_mapping = {5: "existing_key"}
+
+        # Retrieve mixed existing and non-existing global_indexes
+        keys = partition.kv_retrieve_indexes([5, 99])
+
+        assert keys == ["existing_key", None]
+
+    def test_kv_retrieve_indexes_empty_list(self):
+        """Test kv_retrieve_indexes handles empty global_index list."""
+        from transfer_queue.controller import DataPartitionStatus
+
+        partition = DataPartitionStatus(partition_id="kv_test_partition")
+
+        keys = partition.kv_retrieve_indexes([])
+
+        assert keys == []
+
+    def test_kv_retrieve_indexes_partial_match(self):
+        """Test kv_retrieve_indexes with partial global_index matches."""
+        from transfer_queue.controller import DataPartitionStatus
+
+        partition = DataPartitionStatus(partition_id="kv_test_partition")
+
+        partition.keys_mapping = {"key_1": 10, "key_2": 20, "key_3": 30}
+        partition.revert_keys_mapping = {10: "key_1", 20: "key_2", 30: "key_3"}
+
+        # Request only some of the global_indexes
+        keys = partition.kv_retrieve_indexes([10, 30])
+
+        assert keys == ["key_1", "key_3"]

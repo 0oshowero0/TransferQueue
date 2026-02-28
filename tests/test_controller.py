@@ -962,3 +962,105 @@ class TestTransferQueueControllerKvInterface:
         # Clean up
         ray.get(tq_controller.clear_partition.remote(partition_1))
         ray.get(tq_controller.clear_partition.remote(partition_2))
+
+    def test_controller_kv_retrieve_indexes_basic(self, ray_setup):
+        """Test kv_retrieve_indexes retrieves keys from global_indexes."""
+        tq_controller = TransferQueueController.remote()
+        partition_id = "partition_retrieve_idx"
+        keys = ["test_key_a", "test_key_b", "test_key_c"]
+
+        # First create keys using kv_retrieve_keys
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True))
+
+        # Now retrieve keys using global_indexes [0, 1, 2]
+        retrieved_keys = ray.get(
+            tq_controller.kv_retrieve_indexes.remote(global_indexes=[0, 1, 2], partition_id=partition_id)
+        )
+
+        assert retrieved_keys == ["test_key_a", "test_key_b", "test_key_c"]
+        print("✓ kv_retrieve_indexes retrieves keys correctly")
+
+        # Clean up
+        ray.get(tq_controller.clear_partition.remote(partition_id))
+
+    def test_controller_kv_retrieve_indexes_partial(self, ray_setup):
+        """Test kv_retrieve_indexes retrieves subset of keys."""
+        tq_controller = TransferQueueController.remote()
+        partition_id = "partition_retrieve_partial"
+
+        # Create keys using kv_retrieve_keys
+        keys = ["key_0", "key_1", "key_2", "key_3", "key_4"]
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=keys, partition_id=partition_id, create=True))
+
+        # Retrieve only first and last keys
+        retrieved_keys = ray.get(
+            tq_controller.kv_retrieve_indexes.remote(global_indexes=[0, 4], partition_id=partition_id)
+        )
+
+        assert retrieved_keys == ["key_0", "key_4"]
+        print("✓ kv_retrieve_indexes retrieves subset correctly")
+
+        # Clean up
+        ray.get(tq_controller.clear_partition.remote(partition_id))
+
+    def test_controller_kv_retrieve_indexes_single_int(self, ray_setup):
+        """Test kv_retrieve_indexes with list containing single element."""
+        tq_controller = TransferQueueController.remote()
+        partition_id = "partition_single_int"
+
+        # Create key using kv_retrieve_keys
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=["single_key"], partition_id=partition_id, create=True))
+
+        # Retrieve using list with single int
+        retrieved_keys = ray.get(
+            tq_controller.kv_retrieve_indexes.remote(global_indexes=[0], partition_id=partition_id)
+        )
+
+        assert retrieved_keys == ["single_key"]
+        print("✓ kv_retrieve_indexes works with list containing single element")
+
+        # Clean up
+        ray.get(tq_controller.clear_partition.remote(partition_id))
+
+    def test_controller_kv_retrieve_indexes_nonexistent(self, ray_setup):
+        """Test kv_retrieve_indexes handles non-existent global_indexes."""
+        tq_controller = TransferQueueController.remote()
+        partition_id = "partition_nonexistent"
+
+        # Create keys using kv_retrieve_keys
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=["existing_key"], partition_id=partition_id, create=True))
+
+        # Try to retrieve non-existent global_index
+        result = ray.get(tq_controller.kv_retrieve_indexes.remote(global_indexes=[99], partition_id=partition_id))
+
+        # Should return list with None when global_index doesn't exist
+        assert result == [None]
+        print("✓ kv_retrieve_indexes handles non-existent indexes")
+
+        # Clean up
+        ray.get(tq_controller.clear_partition.remote(partition_id))
+
+    def test_controller_kv_retrieve_indexes_multiple_partitions(self, ray_setup):
+        """Test kv_retrieve_indexes respects partition isolation."""
+        tq_controller = TransferQueueController.remote()
+        partition_1 = "partition_idx_1"
+        partition_2 = "partition_idx_2"
+
+        # Create keys in both partitions
+        # Note: global_index is global across partitions, so p2_key will have global_index=1
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=["p1_key"], partition_id=partition_1, create=True))
+        ray.get(tq_controller.kv_retrieve_keys.remote(keys=["p2_key"], partition_id=partition_2, create=True))
+
+        # Retrieve from partition_1 (global_index=0)
+        keys_1 = ray.get(tq_controller.kv_retrieve_indexes.remote(global_indexes=[0], partition_id=partition_1))
+
+        # Retrieve from partition_2 (global_index=1)
+        keys_2 = ray.get(tq_controller.kv_retrieve_indexes.remote(global_indexes=[1], partition_id=partition_2))
+
+        assert keys_1 == ["p1_key"]
+        assert keys_2 == ["p2_key"]
+        print("✓ kv_retrieve_indexes maintains partition isolation")
+
+        # Clean up
+        ray.get(tq_controller.clear_partition.remote(partition_1))
+        ray.get(tq_controller.clear_partition.remote(partition_2))

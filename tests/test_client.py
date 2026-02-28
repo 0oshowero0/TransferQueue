@@ -147,6 +147,9 @@ class MockController:
                     elif request_msg.request_type == ZMQRequestType.KV_RETRIEVE_KEYS:
                         response_body = self._mock_kv_retrieve_keys(request_msg.body)
                         response_type = ZMQRequestType.KV_RETRIEVE_KEYS_RESPONSE
+                    elif request_msg.request_type == ZMQRequestType.KV_RETRIEVE_INDEXES:
+                        response_body = self._mock_kv_retrieve_indexes(request_msg.body)
+                        response_type = ZMQRequestType.KV_RETRIEVE_INDEXES_RESPONSE
                     elif request_msg.request_type == ZMQRequestType.KV_LIST:
                         response_body = self._mock_kv_list(request_msg.body)
                         response_type = ZMQRequestType.KV_LIST_RESPONSE
@@ -249,6 +252,42 @@ class MockController:
         keys = self._kv_partition_keys.get(partition_id, [])
 
         return {"partition_info": {partition_id: {k: {} for k in keys}}, "message": "success"}
+
+    def _mock_kv_retrieve_indexes(self, request_body):
+        """Mock KV retrieve indexes response."""
+        global_indexes = request_body.get("global_indexes", [])
+        partition_id = request_body.get("partition_id", "")
+
+        # Initialize key tracking if not exists
+        if not hasattr(self, "_kv_partition_keys"):
+            self._kv_partition_keys = {}
+
+        # Initialize index to key mapping if not exists
+        if not hasattr(self, "_kv_index_to_key"):
+            self._kv_index_to_key = {}
+
+        # Get keys for this partition
+        partition_keys = self._kv_partition_keys.get(partition_id, [])
+
+        # Build reverse mapping from index to key if needed
+        if not hasattr(self, "_kv_partition_index_map"):
+            self._kv_partition_index_map = {}
+
+        if partition_id not in self._kv_partition_index_map:
+            # Build the mapping from stored keys
+            start_idx = self._get_next_kv_index(partition_id) - len(partition_keys)
+            self._kv_partition_index_map[partition_id] = {}
+            for i, key in enumerate(partition_keys):
+                self._kv_partition_index_map[partition_id][start_idx + i] = key
+
+        index_map = self._kv_partition_index_map.get(partition_id, {})
+
+        # Retrieve keys for the given global_indexes
+        keys = []
+        for idx in global_indexes:
+            keys.append(index_map.get(idx, None))
+
+        return {"keys": keys}
 
     def _get_next_kv_index(self, partition_id):
         """Get next available index for KV keys in partition."""
@@ -1112,3 +1151,196 @@ class TestClientKVInterface:
                 )
 
         asyncio.run(test_invalid_list())
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_single(self, client_setup):
+        """Test async_kv_retrieve_indexes with single global_index."""
+        client, _, _ = client_setup
+        partition_id = "test_partition_idx"
+
+        # First create a key using kv_retrieve_keys
+        await client.async_kv_retrieve_keys(
+            keys=["test_key"],
+            partition_id=partition_id,
+            create=True,
+        )
+
+        # Now retrieve the key using global_index 0
+        keys = await client.async_kv_retrieve_indexes(
+            global_indexes=[0],
+            partition_id=partition_id,
+        )
+
+        assert keys == ["test_key"]
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_multiple(self, client_setup):
+        """Test async_kv_retrieve_indexes with multiple global_indexes."""
+        client, _, _ = client_setup
+        partition_id = "test_partition_idx"
+
+        # First create keys using kv_retrieve_keys
+        keys_to_create = ["key_a", "key_b", "key_c"]
+        await client.async_kv_retrieve_keys(
+            keys=keys_to_create,
+            partition_id=partition_id,
+            create=True,
+        )
+
+        # Retrieve keys using global_indexes [0, 1, 2]
+        keys = await client.async_kv_retrieve_indexes(
+            global_indexes=[0, 1, 2],
+            partition_id=partition_id,
+        )
+
+        assert keys == ["key_a", "key_b", "key_c"]
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_partial(self, client_setup):
+        """Test async_kv_retrieve_indexes with subset of global_indexes."""
+        client, _, _ = client_setup
+        partition_id = "test_partition_idx"
+
+        # First create keys using kv_retrieve_keys
+        await client.async_kv_retrieve_keys(
+            keys=["first_key", "second_key", "third_key"],
+            partition_id=partition_id,
+            create=True,
+        )
+
+        # Retrieve only first and third keys
+        keys = await client.async_kv_retrieve_indexes(
+            global_indexes=[0, 2],
+            partition_id=partition_id,
+        )
+
+        assert keys == ["first_key", "third_key"]
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_single_int(self, client_setup):
+        """Test async_kv_retrieve_indexes accepts a single int."""
+        client, _, _ = client_setup
+        partition_id = "test_partition_idx"
+
+        # First create a key using kv_retrieve_keys
+        await client.async_kv_retrieve_keys(
+            keys=["single_key"],
+            partition_id=partition_id,
+            create=True,
+        )
+
+        # Now retrieve the key using a single int (not a list)
+        keys = await client.async_kv_retrieve_indexes(
+            global_indexes=0,
+            partition_id=partition_id,
+        )
+
+        assert keys == ["single_key"]
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_invalid_type(self, client_setup):
+        """Test async_kv_retrieve_indexes raises error with invalid global_indexes type."""
+        client, _, _ = client_setup
+
+        # Test with invalid type (string instead of int)
+        with pytest.raises(TypeError):
+            await client.async_kv_retrieve_indexes(
+                global_indexes=["not_an_int"],
+                partition_id="test_partition",
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_empty_list(self, client_setup):
+        """Test async_kv_retrieve_indexes raises error with empty list."""
+        client, _, _ = client_setup
+
+        with pytest.raises(ValueError):
+            await client.async_kv_retrieve_indexes(
+                global_indexes=[],
+                partition_id="test_partition",
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_non_existent(self, client_setup):
+        """Test async_kv_retrieve_indexes returns None for non-existent global_indexes."""
+        client, _, _ = client_setup
+        partition_id = "test_partition_idx"
+
+        # First create a key using kv_retrieve_keys
+        await client.async_kv_retrieve_keys(
+            keys=["existing_key"],
+            partition_id=partition_id,
+            create=True,
+        )
+
+        # Try to retrieve a non-existent global_index
+        keys = await client.async_kv_retrieve_indexes(
+            global_indexes=[99],
+            partition_id=partition_id,
+        )
+        assert keys == [None]
+
+    @pytest.mark.asyncio
+    async def test_async_kv_retrieve_indexes_multiple_partitions(self, client_setup):
+        """Test async_kv_retrieve_indexes returns keys from the correct partition."""
+        client, _, _ = client_setup
+        partition_1 = "partition_1"
+        partition_2 = "partition_2"
+
+        # Create keys in both partitions
+        await client.async_kv_retrieve_keys(
+            keys=["key_1"],
+            partition_id=partition_1,
+            create=True,
+        )
+        await client.async_kv_retrieve_keys(
+            keys=["key_2"],
+            partition_id=partition_2,
+            create=True,
+        )
+
+        # Retrieve key from partition_1 (global_index 0)
+        keys_1 = await client.async_kv_retrieve_indexes(
+            global_indexes=[0],
+            partition_id=partition_1,
+        )
+
+        # Retrieve key from partition_2 (global_index 0)
+        keys_2 = await client.async_kv_retrieve_indexes(
+            global_indexes=[0],
+            partition_id=partition_2,
+        )
+
+        assert keys_1 == ["key_1"]
+        assert keys_2 == ["key_2"]
+
+    def test_kv_retrieve_indexes_sync(self, client_setup):
+        """Test synchronous kv_retrieve_indexes."""
+        client, _, _ = client_setup
+        partition_id = "test_partition_sync"
+
+        # First create a key using kv_retrieve_keys
+        client.kv_retrieve_keys(
+            keys=["sync_key"],
+            partition_id=partition_id,
+            create=True,
+        )
+
+        # Now retrieve the key using global_index
+        keys = client.kv_retrieve_indexes(
+            global_indexes=[0],
+            partition_id=partition_id,
+        )
+
+        assert keys == ["sync_key"]
+
+    def test_kv_retrieve_indexes_type_validation(self, client_setup):
+        """Test synchronous kv_retrieve_indexes type validation."""
+        client, _, _ = client_setup
+
+        # Test with non-int element in list
+        with pytest.raises(TypeError):
+            client.kv_retrieve_indexes(
+                global_indexes=[0, "invalid"],
+                partition_id="test_partition",
+            )
