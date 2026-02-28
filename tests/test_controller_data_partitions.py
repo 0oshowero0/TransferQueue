@@ -960,7 +960,7 @@ class TestDataPartitionStatusKvInterface:
         partition.keys_mapping = {"key_a": 0, "key_b": 1, "key_c": 2}
 
         # Retrieve keys
-        global_indexes = partition.kv_retrieve_meta(["key_a", "key_b", "key_c"])
+        global_indexes = partition.kv_retrieve_indexes(["key_a", "key_b", "key_c"])
 
         assert global_indexes == [0, 1, 2]
 
@@ -974,7 +974,7 @@ class TestDataPartitionStatusKvInterface:
         partition.keys_mapping = {"existing_key": 5}
 
         # Retrieve mixed existing and non-existing keys
-        global_indexes = partition.kv_retrieve_meta(["existing_key", "nonexistent_key"])
+        global_indexes = partition.kv_retrieve_indexes(["existing_key", "nonexistent_key"])
 
         assert global_indexes == [5, None]
 
@@ -984,7 +984,7 @@ class TestDataPartitionStatusKvInterface:
 
         partition = DataPartitionStatus(partition_id="kv_test_partition")
 
-        global_indexes = partition.kv_retrieve_meta([])
+        global_indexes = partition.kv_retrieve_indexes([])
 
         assert global_indexes == []
 
@@ -997,7 +997,7 @@ class TestDataPartitionStatusKvInterface:
         partition.keys_mapping = {"key_1": 10, "key_2": 20, "key_3": 30}
 
         # Request only some of the keys
-        global_indexes = partition.kv_retrieve_meta(["key_1", "key_3"])
+        global_indexes = partition.kv_retrieve_indexes(["key_1", "key_3"])
 
         assert global_indexes == [10, 30]
 
