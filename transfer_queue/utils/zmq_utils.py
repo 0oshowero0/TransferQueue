@@ -123,7 +123,7 @@ class ZMQServerInfo:
 
     def to_addr(self, port_name: str) -> str:
         """Convert zmq port name to address string."""
-        return f"tcp://[{self.ip}]:{self.ports[port_name]}"
+        return format_zmq_address(self.ip, self.ports[port_name])
 
     def to_dict(self):
         """Convert ZMQServerInfo to dict."""
@@ -218,11 +218,54 @@ def is_ipv6_address(ip: str) -> bool:
         return False
 
 
+def format_zmq_address(ip: str, port: str | int) -> str:
+    """
+    Format IP and port for ZMQ binding/connecting.
+
+    For IPv6 addresses, ZMQ requires the address to be wrapped in brackets:
+    - IPv6: tcp://[::1]:port
+    - IPv4: tcp://1.2.3.4:port
+
+    Args:
+        ip: IP address (IPv4 or IPv6)
+        port: Port number
+
+    Returns:
+        Formatted ZMQ address string
+    """
+    if is_ipv6_address(ip):
+        return f"tcp://[{ip}]:{port}"
+    else:
+        return f"tcp://{ip}:{port}"
+
+
 def get_free_port() -> str:
     """Get free port of the host."""
-    with socket.socket() as sock:
-        sock.bind(("", 0))
-        return sock.getsockname()[1]
+
+    # Prefer IPv6 if supported, fall back to IPv4
+    families = [socket.AF_INET6, socket.AF_INET]
+    last_error = None
+    for family in families:
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                # For IPv6, allow both IPv4/IPv6 if the platform uses dual-stack by default
+                if family == socket.AF_INET6:
+                    # Some OS default to v6-only; explicitly disable that to allow dual-stack.
+                    # Ignore failures on platforms that don't support IPV6_V6ONLY.
+                    try:
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                    except (OSError, AttributeError):
+                        pass
+
+                sock.bind(("", 0))
+                return sock.getsockname()[1]
+        except OSError as e:
+            last_error = e
+            # Try next family
+            continue
+
+    # Both IPv6 and IPv4 failed
+    raise RuntimeError(f"Failed to get free port: {last_error}")
 
 
 def create_zmq_socket(

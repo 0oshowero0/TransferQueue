@@ -34,7 +34,13 @@ from transfer_queue.storage.managers.base import TransferQueueStorageManager
 from transfer_queue.storage.managers.factory import TransferQueueStorageManagerFactory
 from transfer_queue.storage.simple_backend import StorageMetaGroup
 from transfer_queue.utils.common import get_env_bool
-from transfer_queue.utils.zmq_utils import ZMQMessage, ZMQRequestType, ZMQServerInfo, create_zmq_socket
+from transfer_queue.utils.zmq_utils import (
+    ZMQMessage,
+    ZMQRequestType,
+    ZMQServerInfo,
+    create_zmq_socket,
+    format_zmq_address,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
@@ -150,7 +156,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                     raise RuntimeError(f"Server {server_key} not found in registered servers")
 
                 context = zmq.asyncio.Context()
-                address = f"tcp://[{server_info.ip}]:{server_info.ports.get(socket_name)}"
+                address = format_zmq_address(server_info.ip, server_info.ports.get(socket_name))
                 identity = f"{self.storage_manager_id}_to_{server_info.id}_{uuid4().hex[:8]}".encode()
                 sock = create_zmq_socket(context, zmq.DEALER, identity=identity, ip=server_info.ip)
 

@@ -32,7 +32,14 @@ from transfer_queue.metadata import SampleMeta
 from transfer_queue.utils.common import limit_pytorch_auto_parallel_threads
 from transfer_queue.utils.enum_utils import TransferQueueRole
 from transfer_queue.utils.perf_utils import IntervalPerfMonitor
-from transfer_queue.utils.zmq_utils import ZMQMessage, ZMQRequestType, ZMQServerInfo, create_zmq_socket, get_free_port
+from transfer_queue.utils.zmq_utils import (
+    ZMQMessage,
+    ZMQRequestType,
+    ZMQServerInfo,
+    create_zmq_socket,
+    format_zmq_address,
+    get_free_port,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
@@ -216,7 +223,7 @@ class SimpleStorageUnit:
         while True:
             try:
                 self._put_get_socket_port = get_free_port()
-                self.put_get_socket.bind(f"tcp://[{self._node_ip}]:{self._put_get_socket_port}")
+                self.put_get_socket.bind(format_zmq_address(self._node_ip, self._put_get_socket_port))
                 break
             except zmq.ZMQError:
                 logger.warning(f"[{self.storage_unit_id}]: Try to bind ZMQ sockets failed, retrying...")

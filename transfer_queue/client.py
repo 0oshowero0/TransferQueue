@@ -39,6 +39,7 @@ from transfer_queue.utils.zmq_utils import (
     ZMQRequestType,
     ZMQServerInfo,
     create_zmq_socket,
+    format_zmq_address,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ class AsyncTransferQueueClient:
                     raise RuntimeError("No controller registered")
 
                 context = zmq.asyncio.Context()
-                address = f"tcp://[{server_info.ip}]:{server_info.ports.get(socket_name)}"
+                address = format_zmq_address(server_info.ip, server_info.ports.get(socket_name))
                 identity = f"{self.client_id}_to_{server_info.id}_{uuid4().hex[:8]}".encode()
                 sock = create_zmq_socket(context, zmq.DEALER, identity=identity, ip=server_info.ip)
 
