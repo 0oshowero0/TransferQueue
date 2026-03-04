@@ -123,7 +123,7 @@ class ZMQServerInfo:
 
     def to_addr(self, port_name: str) -> str:
         """Convert zmq port name to address string."""
-        return f"tcp://{self.ip}:{self.ports[port_name]}"
+        return format_zmq_address(self.ip, self.ports[port_name])
 
     def to_dict(self):
         """Convert ZMQServerInfo to dict."""
@@ -209,6 +209,33 @@ class ZMQMessage:
             return pickle.loads(frames[0])
 
 
+def is_ipv6_address(ip: str) -> bool:
+    """Check if the given IP address is an IPv6 address."""
+    try:
+        socket.inet_pton(socket.AF_INET6, ip)
+        return True
+    except OSError:
+        return False
+
+
+def format_zmq_address(ip: str, port: str | int) -> str:
+    """
+    Format IP and port for ZMQ binding/connecting.
+
+    For IPv6 addresses, ZMQ requires the address to be wrapped in brackets:
+    - IPv6: tcp://[::1]:port
+    This format also works for IPv4 addresses.
+
+    Args:
+        ip: IP address (IPv4 or IPv6)
+        port: Port number
+
+    Returns:
+        Formatted ZMQ address string
+    """
+    return f"tcp://[{ip}]:{port}"
+
+
 def get_free_port() -> str:
     """Get free port of the host."""
     with socket.socket() as sock:
@@ -220,10 +247,22 @@ def create_zmq_socket(
     ctx: zmq.Context,
     socket_type: Any,
     identity: Optional[bytestr] = None,
+    ip: Optional[str] = None,
 ) -> zmq.Socket:
-    """Create ZMQ socket."""
+    """Create ZMQ socket.
+
+    Args:
+        ctx: ZMQ context
+        socket_type: ZMQ socket type
+        identity: Optional socket identity
+        ip: Optional IP address to detect IPv6 and enable IPV6 socket option
+    """
     mem = psutil.virtual_memory()
     socket = ctx.socket(socket_type)
+
+    # Enable IPv6 if the IP address is IPv6
+    if ip is not None and is_ipv6_address(ip):
+        socket.setsockopt(zmq.IPV6, 1)
 
     # Calculate buffer size based on system memory
     total_mem = mem.total / 1024**3

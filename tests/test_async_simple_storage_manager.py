@@ -221,7 +221,7 @@ async def test_async_storage_manager_mapping_functions():
 
         # Mock handshake response
         handshake_response = ZMQMessage.create(
-            request_type=ZMQRequestType.HANDSHAKE_ACK,
+            request_type=ZMQRequestType.HANDSHAKE_ACK,  # type: ignore[arg-type]
             sender_id="controller_0",
             body={"message": "Handshake successful"},
         )
@@ -295,7 +295,7 @@ async def test_async_storage_manager_error_handling():
 
         # Mock handshake response
         handshake_response = ZMQMessage.create(
-            request_type=ZMQRequestType.HANDSHAKE_ACK,
+            request_type=ZMQRequestType.HANDSHAKE_ACK,  # type: ignore[arg-type]
             sender_id="controller_0",
             body={"message": "Handshake successful"},
         )

@@ -124,9 +124,9 @@ class AsyncTransferQueueClient:
                     raise RuntimeError("No controller registered")
 
                 context = zmq.asyncio.Context()
-                address = f"tcp://{server_info.ip}:{server_info.ports.get(socket_name)}"
+                address = f"tcp://[{server_info.ip}]:{server_info.ports.get(socket_name)}"
                 identity = f"{self.client_id}_to_{server_info.id}_{uuid4().hex[:8]}".encode()
-                sock = create_zmq_socket(context, zmq.DEALER, identity=identity)
+                sock = create_zmq_socket(context, zmq.DEALER, identity=identity, ip=server_info.ip)
 
                 try:
                     sock.connect(address)

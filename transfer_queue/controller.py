@@ -1585,20 +1585,23 @@ class TransferQueueController:
                 self.handshake_socket = create_zmq_socket(
                     ctx=self.zmq_context,
                     socket_type=zmq.ROUTER,
+                    ip=self._node_ip,
                 )
-                self.handshake_socket.bind(f"tcp://{self._node_ip}:{self._handshake_socket_port}")
+                self.handshake_socket.bind(f"tcp://[{self._node_ip}]:{self._handshake_socket_port}")
 
                 self.request_handle_socket = create_zmq_socket(
                     ctx=self.zmq_context,
                     socket_type=zmq.ROUTER,
+                    ip=self._node_ip,
                 )
-                self.request_handle_socket.bind(f"tcp://{self._node_ip}:{self._request_handle_socket_port}")
+                self.request_handle_socket.bind(f"tcp://[{self._node_ip}]:{self._request_handle_socket_port}")
 
                 self.data_status_update_socket = create_zmq_socket(
                     ctx=self.zmq_context,
                     socket_type=zmq.ROUTER,
+                    ip=self._node_ip,
                 )
-                self.data_status_update_socket.bind(f"tcp://{self._node_ip}:{self._data_status_update_socket_port}")
+                self.data_status_update_socket.bind(f"tcp://[{self._node_ip}]:{self._data_status_update_socket_port}")
 
                 break
             except zmq.ZMQError:
