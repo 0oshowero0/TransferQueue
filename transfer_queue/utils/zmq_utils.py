@@ -115,7 +115,7 @@ class ZMQServerInfo:
     TransferQueue server info class.
     """
 
-    def __init__(self, role: TransferQueueRole, id: str, ip: str, ports: dict[str, str]):
+    def __init__(self, role: TransferQueueRole, id: str, ip: str, ports: dict[str, int]):
         self.role = role
         self.id = id
         self.ip = ip
@@ -218,7 +218,7 @@ def is_ipv6_address(ip: str) -> bool:
         return False
 
 
-def format_zmq_address(ip: str, port: str | int) -> str:
+def format_zmq_address(ip: str, port: int) -> str:
     """
     Format IP and port for ZMQ binding/connecting.
 
@@ -239,7 +239,7 @@ def format_zmq_address(ip: str, port: str | int) -> str:
         return f"tcp://{ip}:{port}"
 
 
-def get_free_port() -> str:
+def get_free_port() -> int:
     """Get free port of the host."""
 
     # Prefer IPv6 if supported, fall back to IPv4
