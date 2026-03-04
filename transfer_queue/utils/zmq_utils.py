@@ -123,7 +123,7 @@ class ZMQServerInfo:
 
     def to_addr(self, port_name: str) -> str:
         """Convert zmq port name to address string."""
-        return format_zmq_address(self.ip, self.ports[port_name])
+        return f"tcp://[{self.ip}]:{self.ports[port_name]}"
 
     def to_dict(self):
         """Convert ZMQServerInfo to dict."""
@@ -216,24 +216,6 @@ def is_ipv6_address(ip: str) -> bool:
         return True
     except OSError:
         return False
-
-
-def format_zmq_address(ip: str, port: str | int) -> str:
-    """
-    Format IP and port for ZMQ binding/connecting.
-
-    For IPv6 addresses, ZMQ requires the address to be wrapped in brackets:
-    - IPv6: tcp://[::1]:port
-    This format also works for IPv4 addresses.
-
-    Args:
-        ip: IP address (IPv4 or IPv6)
-        port: Port number
-
-    Returns:
-        Formatted ZMQ address string
-    """
-    return f"tcp://[{ip}]:{port}"
 
 
 def get_free_port() -> str:
