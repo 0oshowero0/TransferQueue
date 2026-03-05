@@ -243,7 +243,10 @@ def close():
         pass
 
     if _TRANSFER_QUEUE_CONTROLLER:
-        ray.kill(_TRANSFER_QUEUE_CONTROLLER)
+        try:
+            ray.kill(_TRANSFER_QUEUE_CONTROLLER)
+        except Exception:
+            pass
         _TRANSFER_QUEUE_CONTROLLER = None
 
     try:
