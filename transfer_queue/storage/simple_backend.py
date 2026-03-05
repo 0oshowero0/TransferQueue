@@ -26,7 +26,6 @@ from uuid import uuid4
 
 import ray
 import zmq
-from ray.util import get_node_ip_address
 
 from transfer_queue.metadata import SampleMeta
 from transfer_queue.utils.common import limit_pytorch_auto_parallel_threads
@@ -39,6 +38,7 @@ from transfer_queue.utils.zmq_utils import (
     create_zmq_socket,
     format_zmq_address,
     get_free_port,
+    get_node_ip_address_raw,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,14 +215,14 @@ class SimpleStorageUnit:
         - worker_socket (DEALER): Backend socket for worker communication.
         """
         self.zmq_context = zmq.Context()
-        self._node_ip = get_node_ip_address()
+        self._node_ip = get_node_ip_address_raw()
 
         # Frontend: ROUTER for receiving client requests
-        self.put_get_socket = create_zmq_socket(self.zmq_context, zmq.ROUTER, ip=self._node_ip)
+        self.put_get_socket = create_zmq_socket(self.zmq_context, zmq.ROUTER, self._node_ip)
 
         while True:
             try:
-                self._put_get_socket_port = get_free_port()
+                self._put_get_socket_port = get_free_port(ip=self._node_ip)
                 self.put_get_socket.bind(format_zmq_address(self._node_ip, self._put_get_socket_port))
                 break
             except zmq.ZMQError:
@@ -230,7 +230,7 @@ class SimpleStorageUnit:
                 continue
 
         # Backend: DEALER for worker communication (connected via zmq.proxy)
-        self.worker_socket = create_zmq_socket(self.zmq_context, zmq.DEALER)
+        self.worker_socket = create_zmq_socket(self.zmq_context, zmq.DEALER, self._node_ip)
         self.worker_socket.bind(self._inproc_addr)
 
         self.zmq_server_info = ZMQServerInfo(
@@ -276,8 +276,8 @@ class SimpleStorageUnit:
 
     def _worker_routine(self) -> None:
         """Worker thread for processing requests."""
-        # Each worker must have its own socket
-        worker_socket = create_zmq_socket(self.zmq_context, zmq.DEALER)
+
+        worker_socket = create_zmq_socket(self.zmq_context, zmq.DEALER, self._node_ip)
         worker_socket.connect(self._inproc_addr)
 
         poller = zmq.Poller()

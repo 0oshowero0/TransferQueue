@@ -29,7 +29,6 @@ import ray
 import torch
 import zmq
 from omegaconf import DictConfig
-from ray.util import get_node_ip_address
 from torch import Tensor
 
 from transfer_queue.metadata import (
@@ -47,6 +46,7 @@ from transfer_queue.utils.zmq_utils import (
     create_zmq_socket,
     format_zmq_address,
     get_free_port,
+    get_node_ip_address_raw,
 )
 
 logger = logging.getLogger(__name__)
@@ -1575,13 +1575,13 @@ class TransferQueueController:
     def _init_zmq_socket(self):
         """Initialize ZMQ sockets for communication."""
         self.zmq_context = zmq.Context()
-        self._node_ip = get_node_ip_address()
+        self._node_ip = get_node_ip_address_raw()
 
         while True:
             try:
-                self._handshake_socket_port = get_free_port()
-                self._request_handle_socket_port = get_free_port()
-                self._data_status_update_socket_port = get_free_port()
+                self._handshake_socket_port = get_free_port(ip=self._node_ip)
+                self._request_handle_socket_port = get_free_port(ip=self._node_ip)
+                self._data_status_update_socket_port = get_free_port(ip=self._node_ip)
 
                 self.handshake_socket = create_zmq_socket(
                     ctx=self.zmq_context,

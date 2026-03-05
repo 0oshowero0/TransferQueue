@@ -83,8 +83,9 @@ class TransferQueueStorageManager(ABC):
 
             # create zmq socket for handshake (sync, for initial connection)
             self.controller_handshake_socket = create_zmq_socket(
-                sync_zmq_context,
-                zmq.DEALER,
+                ctx=sync_zmq_context,
+                socket_type=zmq.DEALER,
+                ip=self.controller_info.ip,
                 identity=f"{self.storage_manager_id}-controller_handshake_socket-{uuid4().hex[:8]}".encode(),
             )
 
@@ -219,13 +220,13 @@ class TransferQueueStorageManager(ABC):
 
         # create dynamic socket
         identity = f"{self.storage_manager_id}-data_update-{uuid4().hex[:8]}".encode()
-        sock = create_zmq_socket(self.zmq_context, zmq.DEALER, identity=identity)
+        sock = create_zmq_socket(self.zmq_context, zmq.DEALER, self.controller_info.ip, identity)
 
         try:
             sock.connect(self.controller_info.to_addr("data_status_update_socket"))
 
             request_msg = ZMQMessage.create(
-                request_type=ZMQRequestType.NOTIFY_DATA_UPDATE,
+                request_type=ZMQRequestType.NOTIFY_DATA_UPDATE,  # type: ignore[arg-type]
                 sender_id=self.storage_manager_id,
                 body={
                     "partition_id": partition_id,
@@ -253,7 +254,7 @@ class TransferQueueStorageManager(ABC):
                     messages = await asyncio.wait_for(sock.recv_multipart(), timeout=poll_interval)
                     response_msg = ZMQMessage.deserialize(messages)
 
-                    if response_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE_ACK:
+                    if response_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE_ACK:  # type: ignore[arg-type]
                         response_received = True
                         logger.debug(
                             f"[{self.storage_manager_id}]: Get data status update ACK response "
@@ -272,7 +273,7 @@ class TransferQueueStorageManager(ABC):
             logger.error(f"[{self.storage_manager_id}]: Error during notify_data_update: {e}")
             try:
                 error_msg = ZMQMessage.create(
-                    request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ERROR,
+                    request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ERROR,  # type: ignore[arg-type]
                     sender_id=self.storage_manager_id,
                     body={"message": f"Failed to notify: {str(e)}"},
                 ).serialize()

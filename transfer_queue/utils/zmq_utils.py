@@ -25,6 +25,7 @@ from uuid import uuid4
 import psutil
 import ray
 import zmq
+from ray.util import get_node_ip_address
 
 from transfer_queue.utils.common import (
     get_env_bool,
@@ -239,54 +240,57 @@ def format_zmq_address(ip: str, port: int) -> str:
         return f"tcp://{ip}:{port}"
 
 
-def get_free_port() -> int:
-    """Get free port of the host."""
+def get_node_ip_address_raw() -> str:
+    """A wrapper around Ray's get_node_ip_address().
 
-    # Prefer IPv6 if supported, fall back to IPv4
-    families = [socket.AF_INET6, socket.AF_INET]
-    last_error = None
-    for family in families:
-        try:
-            with socket.socket(family, socket.SOCK_STREAM) as sock:
-                # For IPv6, allow both IPv4/IPv6 if the platform uses dual-stack by default
-                if family == socket.AF_INET6:
-                    # Some OS default to v6-only; explicitly disable that to allow dual-stack.
-                    # Ignore failures on platforms that don't support IPV6_V6ONLY.
-                    try:
-                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-                    except (OSError, AttributeError):
-                        pass
+    This function intentionally returns a raw IPv4/IPv6 address WITHOUT brackets.
+    """
 
-                sock.bind(("", 0))
-                return sock.getsockname()[1]
-        except OSError as e:
-            last_error = e
-            # Try next family
-            continue
+    return get_node_ip_address().strip("[]")
 
-    # Both IPv6 and IPv4 failed
-    raise RuntimeError(f"Failed to get free port: {last_error}")
+
+def get_free_port(ip: str) -> int:
+    """Get free port of the host.
+
+    Args:
+        ip: IP address to detect IPv6 and enable IPV6 socket option
+    """
+    is_ipv6 = is_ipv6_address(ip)
+    family = socket.AF_INET6 if is_ipv6 else socket.AF_INET
+
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        if is_ipv6:
+            # Try to allow dual-stack if the platform supports it.
+            try:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except (OSError, AttributeError):
+                # Some platforms don't support IPV6_V6ONLY or this option;
+                # in that case just ignore and use the default behavior.
+                pass
+
+        sock.bind(("", 0))
+        return sock.getsockname()[1]
 
 
 def create_zmq_socket(
     ctx: zmq.Context,
     socket_type: Any,
+    ip: str,
     identity: Optional[bytestr] = None,
-    ip: Optional[str] = None,
 ) -> zmq.Socket:
     """Create ZMQ socket.
 
     Args:
         ctx: ZMQ context
         socket_type: ZMQ socket type
+        ip: IP address to detect IPv6 and enable IPV6 socket option
         identity: Optional socket identity
-        ip: Optional IP address to detect IPv6 and enable IPV6 socket option
     """
     mem = psutil.virtual_memory()
     socket = ctx.socket(socket_type)
 
     # Enable IPv6 if the IP address is IPv6
-    if ip is not None and is_ipv6_address(ip):
+    if is_ipv6_address(ip):
         socket.setsockopt(zmq.IPV6, 1)
 
     # Calculate buffer size based on system memory
