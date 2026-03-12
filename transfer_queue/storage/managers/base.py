@@ -584,10 +584,6 @@ class KVStorageManager(TransferQueueStorageManager):
         """
         Store tensor data in the backend storage and notify the controller.
         """
-        if not metadata.field_names:
-            logger.warning("Attempted to put data, but metadata contains no fields.")
-            return
-
         num_samples = len(metadata.global_indexes)
         if num_samples == 0:
             return

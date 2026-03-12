@@ -13,8 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""E2E lifecycle consistency tests for TransferQueue."""
-
+import os
 import sys
 import time
 from pathlib import Path
@@ -23,6 +22,7 @@ import numpy as np
 import pytest
 import ray
 import torch
+from omegaconf import OmegaConf
 from tensordict import TensorDict
 from tensordict.tensorclass import NonTensorData
 
@@ -46,6 +46,38 @@ DEFAULT_FIELDS = [
     "non_tensor_stack",
 ]
 
+# Backend configurations for E2E tests
+BACKEND_CONFIGS = {
+    "SimpleStorage": {
+        "controller": {
+            "polling_mode": True,
+        },
+        "backend": {
+            "storage_backend": "SimpleStorage",
+            "SimpleStorage": {
+                "total_storage_size": 200,
+                "num_data_storage_units": 2,
+            },
+        },
+    },
+    "MooncakeStore": {
+        "controller": {
+            "polling_mode": True,
+        },
+        "backend": {
+            "storage_backend": "MooncakeStore",
+            "MooncakeStore": {
+                "global_segment_size": 134217728,  # 128MB
+                "local_buffer_size": 134217728,  # 128MB
+                "metadata_server": "localhost:50050",
+                "master_server_address": "localhost:50051",
+                "protocol": "tcp",
+                "device_name": "",
+            },
+        },
+    },
+}
+
 
 @pytest.fixture(scope="module")
 def ray_cluster():
@@ -57,24 +89,33 @@ def ray_cluster():
 
 
 @pytest.fixture(scope="module")
-def e2e_client(ray_cluster):
-    """Create a client using transfer_queue.init() for lifecycle testing."""
-    from omegaconf import OmegaConf
+def backend_name():
+    """Get the backend name from environment variable.
 
+    Environment variables:
+        TQ_TEST_BACKEND: Backend name (SimpleStorage or MooncakeStore)
+
+    To run tests for a specific backend:
+        TQ_TEST_BACKEND=SimpleStorage pytest tests/e2e/test_e2e_lifecycle_consistency.py
+        TQ_TEST_BACKEND=MooncakeStore pytest tests/e2e/test_e2e_lifecycle_consistency.py
+    """
+    return os.environ.get("TQ_TEST_BACKEND", "SimpleStorage")
+
+
+@pytest.fixture(scope="module")
+def e2e_client(ray_cluster, backend_name):
+    """Create a client using transfer_queue.init() for lifecycle testing.
+
+    Args:
+        ray_cluster: Ray cluster fixture
+        backend_name: Backend name from TQ_TEST_BACKEND env var
+    """
     import transfer_queue
 
-    config = {
-        "controller": {
-            "polling_mode": True,
-        },
-        "backend": {
-            "storage_backend": "SimpleStorage",
-            "SimpleStorage": {
-                "total_storage_size": 200,
-                "num_data_storage_units": 2,
-            },
-        },
-    }
+    if backend_name not in BACKEND_CONFIGS:
+        raise ValueError(f"Unknown backend: {backend_name}. Available: {list(BACKEND_CONFIGS.keys())}")
+
+    config = BACKEND_CONFIGS[backend_name]
     transfer_queue.init(OmegaConf.create(config))
     client = transfer_queue.get_client()
     yield client
@@ -277,7 +318,7 @@ def _reorder_tensordict(td: TensorDict, order: list[int]) -> TensorDict:
 
 # Scenario One: Core Read/Write Consistency
 def test_core_consistency(e2e_client):
-    """Put full complex data then get — verify all field types are correctly round-tripped."""
+    """Put full complex data then get - verify all field types are correctly round-tripped."""
     client = e2e_client
     partition_id = "test_core_consistency"
     batch_size = 20

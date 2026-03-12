@@ -36,8 +36,8 @@ except ImportError:
 BATCH_SIZE_LIMIT: int = 500
 
 
-@StorageClientFactory.register("MooncakeStorageClient")
-class MooncakeStorageClient(TransferQueueStorageKVClient):
+@StorageClientFactory.register("MooncakeStoreClient")
+class MooncakeStoreClient(TransferQueueStorageKVClient):
     """
     Storage client for MooncakeStore.
     """
@@ -46,13 +46,29 @@ class MooncakeStorageClient(TransferQueueStorageKVClient):
         if not MOONCAKE_STORE_IMPORTED:
             raise ImportError("Mooncake Store not installed. Please install via: pip install mooncake-transfer-engine")
 
+        # Required: Address of local host
         self.local_hostname = config.get("local_hostname", "localhost")
-        self.metadata_server = config.get("metadata_server")
-        self.global_segment_size = config.get("global_segment_size", 512 * 1024 * 1024)
-        self.local_buffer_size = config.get("local_buffer_size", 128 * 1024 * 1024)
+        # Required: Address of the HTTP metadata server (e.g., "localhost:8080")
+        self.metadata_server = config.get("metadata_server", None)
+        # Required: Address of the master server RPC endpoint (e.g., "localhost:8081")
+        self.master_server_address = config.get("master_server_address")
+
+        self.global_segment_size = int(config.get("global_segment_size", 4096 * 1024 * 1024))
+        self.local_buffer_size = int(config.get("local_buffer_size", 1024 * 1024 * 1024))
         self.protocol = config.get("protocol", "tcp")
         self.device_name = config.get("device_name", "")
-        self.master_server_address = config.get("master_server_address")
+        if self.device_name is None:
+            self.device_name = ""
+
+        if self.metadata_server is None or not isinstance(self.metadata_server, str):
+            raise ValueError("Missing or invalid 'metadata_server' in config")
+        if self.master_server_address is None or not isinstance(self.master_server_address, str):
+            raise ValueError("Missing or invalid 'master_server_address' in config")
+
+        if not self.metadata_server.startswith("http://") and not self.metadata_server.startswith("etcd://"):
+            self.metadata_server = f"http://{self.metadata_server}"
+        if not self.metadata_server.startswith("etcd://") and not self.metadata_server.endswith("/metadata"):
+            self.metadata_server = self.metadata_server + "/metadata"
 
         if self.metadata_server is None:
             raise ValueError("Missing 'metadata_server' in config")
@@ -146,7 +162,7 @@ class MooncakeStorageClient(TransferQueueStorageKVClient):
         """
 
         if shapes is None or dtypes is None:
-            raise ValueError("MooncakeStorageClient needs shapes and dtypes")
+            raise ValueError("MooncakeStoreClient needs shapes and dtypes")
         if not (len(keys) == len(shapes) == len(dtypes)):
             raise ValueError("Lengths of keys, shapes, dtypes must match")
 
