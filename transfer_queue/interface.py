@@ -317,20 +317,27 @@ def close():
                     for storage in value.values():
                         ray.kill(storage)
                 elif key == "MooncakeStore":
-                    import signal
-
-                    process = value
-                    if process and process.poll() is None:
-                        try:
-                            pgid = os.getpgid(process.pid)
-                            os.killpg(pgid, signal.SIGTERM)
-                            try:
-                                process.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                os.killpg(pgid, signal.SIGKILL)
-                                process.wait(timeout=5)
-                        except ProcessLookupError:
-                            logger.warning(f"MooncakeStore process already exited: pid={process.pid}")
+                    check = subprocess.run(["pgrep", "-f", "mooncake_master"], stdout=subprocess.PIPE, text=True)
+                    if check.returncode == 0:
+                        pids = check.stdout.strip().replace("\n", ", ")
+                        logger.warning(
+                            f"mooncake_master process still exists with PID: {pids}. "
+                            f"Consider manually killing mooncake_master."
+                        )
+                    # os.system('pkill -f "TransferQueue"')
+                    # process = value
+                    # if process and process.poll() is None:
+                    #     try:
+                    #         import signal
+                    #         pgid = os.getpgid(process.pid)
+                    #         os.killpg(pgid, signal.SIGTERM)
+                    #         try:
+                    #             process.wait(timeout=5)
+                    #         except subprocess.TimeoutExpired:
+                    #             os.killpg(pgid, signal.SIGKILL)
+                    #             process.wait(timeout=5)
+                    #     except ProcessLookupError:
+                    #         logger.warning(f"MooncakeStore process already exited: pid={process.pid}")
                 else:
                     logger.warning(f"close for _TRANSFER_QUEUE_STORAGE with key {key} is not supported for now.")
 
