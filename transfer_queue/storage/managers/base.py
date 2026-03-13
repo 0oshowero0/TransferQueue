@@ -565,6 +565,8 @@ class KVStorageManager(TransferQueueStorageManager):
         custom_backend_meta_list = []
         num_samples = len(metadata)
 
+        # FIXME: Use BatchMeta.get_dtype and .get_shape instead
+
         for field_name in sorted(metadata.field_names):
             field_meta = metadata.field_schema.get(field_name, {})
             field_shape = field_meta.get("shape")
