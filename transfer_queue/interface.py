@@ -127,8 +127,8 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
 
                 cmd = [
                     "mooncake_master",
-                    "-default_kv_lease_ttl=999",
-                    "-default_kv_soft_pin_ttl=999",
+                    "-default_kv_lease_ttl=999999",
+                    "-default_kv_soft_pin_ttl=999999",
                     "--eviction_high_watermark_ratio=1.0",
                     "--eviction_ratio=0.0",
                     "--enable_http_metadata_server=true",

@@ -47,7 +47,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             raise ImportError("Mooncake Store not installed. Please install via: pip install mooncake-transfer-engine")
 
         # Required: Address of local host
-        self.local_hostname = config.get("local_hostname", "localhost")
+        self.local_hostname = config.get("local_hostname", "")
         # Required: Address of the HTTP metadata server (e.g., "localhost:8080")
         self.metadata_server = config.get("metadata_server", None)
         # Required: Address of the master server RPC endpoint (e.g., "localhost:8081")
@@ -59,6 +59,13 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
         self.device_name = config.get("device_name", "")
         if self.device_name is None:
             self.device_name = ""
+
+        if self.local_hostname is None or self.local_hostname == "":
+            from transfer_queue.utils.zmq_utils import get_node_ip_address_raw
+
+            ip = get_node_ip_address_raw()
+            logger.info(f"Try to use Ray IP ({ip}) as local hostname for MooncakeStore.")
+            self.local_hostname = ip
 
         if self.metadata_server is None or not isinstance(self.metadata_server, str):
             raise ValueError("Missing or invalid 'metadata_server' in config")
