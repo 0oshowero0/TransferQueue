@@ -324,7 +324,7 @@ def close():
                             f"mooncake_master process still exists with PID: {pids}. "
                             f"Consider manually killing mooncake_master."
                         )
-                    # os.system('pkill -f "TransferQueue"')
+                    # os.system('pkill -f "mooncake_master"')
                     # process = value
                     # if process and process.poll() is None:
                     #     try:

@@ -387,6 +387,13 @@ class AsyncTransferQueueClient:
                 "Call initialize_storage_manager() before performing storage operations."
             )
 
+        for field_name, field_data in data.items():
+            if isinstance(field_data, torch.Tensor) and field_data.ndim == 1:
+                logger.warning(
+                    f"[{self.client_id}]: Data field '{field_name}' is a tensor with only one dimension. "
+                    f"You may receive 2D tensors in key-value based backend."
+                )
+
         if metadata is None:
             if partition_id is None:
                 raise ValueError("partition_id must be provided if metadata is not given")
@@ -479,6 +486,10 @@ class AsyncTransferQueueClient:
                 raise RuntimeError("No controller registered")
 
             metadata = await self._get_partition_meta(partition_id)
+
+            if not metadata:
+                logger.warning(f"Try to clear an non-exist partition {partition_id}. No action will be taken.")
+                return
 
             # Clear the controller metadata
             await self._clear_partition_in_controller(partition_id)

@@ -285,7 +285,7 @@ def verify_list_equal(retrieved, expected) -> bool:
     if isinstance(retrieved, NonTensorStack):
         retrieved = retrieved.tolist()
     elif isinstance(retrieved, torch.Tensor):
-        retrieved = retrieved.tolist()
+        retrieved = retrieved.reshape(-1).tolist()  # may get 2D tensor back using key-value based backend
     if isinstance(expected, NonTensorStack):
         expected = expected.tolist()
     elif isinstance(expected, torch.Tensor):
@@ -322,6 +322,18 @@ def _reorder_tensordict(td: TensorDict, order: list[int]) -> TensorDict:
         else:
             reordered[key] = field[torch.tensor(order)]
     return TensorDict(reordered, batch_size=td.batch_size)
+
+
+def recover_local_index(global_index_order, new_global_index_order):
+    value_to_new_index = {}
+    for idx, val in enumerate(new_global_index_order):
+        value_to_new_index[val] = idx
+
+    local_index_order_to_recover = []
+    for val in global_index_order:
+        local_index_order_to_recover.append(value_to_new_index[val])
+
+    return local_index_order_to_recover
 
 
 # Scenario One: Core Read/Write Consistency
@@ -403,6 +415,12 @@ def test_core_consistency(e2e_client):
 # Scenario Two: Cross-Shard Update
 def test_cross_shard_complex_update(e2e_client):
     """Cross-shard update: put A + put B, update overlapping region, verify all regions."""
+
+    # FIXME: Add data update test to MooncakeStore after Upsert function is ready
+    #        https://github.com/kvcache-ai/Mooncake/issues/1645
+    if os.environ.get("TQ_TEST_BACKEND", "SimpleStorage") == "MooncakeStore":
+        return
+
     client = e2e_client
     partition_id = "test_cross_shard_update"
     task_name = "cross_shard_task"
@@ -785,12 +803,19 @@ def test_retrieved_data_writability_and_memory_safety(e2e_client):
 
     indices = list(range(batch_size))
     original_data = generate_complex_data(indices)
-    client.put(data=original_data, partition_id=partition_id)
+    original_meta = client.put(data=original_data, partition_id=partition_id)
 
+    global_index_order = original_meta.global_indexes
     try:
         # === Phase 1: Retrieve and verify writability ===
         meta = poll_for_meta(client, partition_id, fields, batch_size, task_name, mode="force_fetch")
         assert meta is not None and meta.size == batch_size
+
+        # the global_index_order in retrieved meta is different from the original one.
+        # we need to reorder first.
+        local_index_order = recover_local_index(global_index_order, meta.global_indexes)
+        meta = meta.select_samples(local_index_order)
+
         retrieved = client.get_data(meta)
 
         # 1. tensor_f32: writable
@@ -834,6 +859,12 @@ def test_retrieved_data_writability_and_memory_safety(e2e_client):
         # Re-retrieve the same data — modifications above should NOT have affected storage
         meta2 = poll_for_meta(client, partition_id, fields, batch_size, task_name, mode="force_fetch")
         assert meta2 is not None and meta2.size == batch_size
+
+        # the global_index_order in retrieved meta is different from the original one.
+        # we need to reorder first.
+        local_index_order = recover_local_index(global_index_order, meta2.global_indexes)
+        meta2 = meta2.select_samples(local_index_order)
+
         retrieved2 = client.get_data(meta2)
 
         # tensor_f32[0,0] should be the original value, not 99999.0

@@ -242,6 +242,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
     def clear(self, keys: list[str], custom_backend_meta=None):
         """Deletes multiple keys from MooncakeStore.
 
+
         Args:
             keys (List[str]): List of keys to remove.
             custom_backend_meta (List[Any], optional): ...
@@ -251,6 +252,13 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             ret = self._store.remove_by_regex(gid, force=True)
             if ret < 0:
                 logger.warning(f"remove failed for key '{gid}' with error code: {ret}")
+
+        # FIXME: controller returned BatchMeta may have mismatched fields in some case, preventing
+        #        key-value based backends to accurately clear all existing keys..
+        # for key in keys:
+        #     ret = self._store.remove(key)
+        #     if not (ret == 0 or ret == -704):
+        #         logger.warning(f"remove failed for key '{key}' with error code: {ret}")
 
     def close(self):
         """Closes MooncakeStore."""
