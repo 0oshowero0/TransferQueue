@@ -98,12 +98,19 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
             _TRANSFER_QUEUE_STORAGE["SimpleStorage"] = simple_storage_handles
         if conf.backend.storage_backend == "MooncakeStore":
             if conf.backend.MooncakeStore.auto_init:
-                logger.info("Try to initialize mooncake_master automatically.")
+                # Try to kill existing mooncake_master processes before starting a new one to avoid potential conflicts
+                check = subprocess.run(["pgrep", "-f", "mooncake_master"], stdout=subprocess.PIPE, text=True)
+                if check.returncode == 0:
+                    pids = check.stdout.strip().replace("\n", ", ")
+                    logging.info(f"Find existing mooncake_master (PID: {pids}), try to kill first...")
+
+                    result = os.system('pkill -f "[m]ooncake_master"')
+                    if result == 0:
+                        logging.info("Successfully killed existing mooncake_master processes.")
+                    else:
+                        raise RuntimeError(f"Failed to kill existing mooncake_master processes (exit code: {result}).")
+
                 raw_address = conf.backend.MooncakeStore.metadata_server
-
-                if raw_address is None or not isinstance(raw_address, str):
-                    raise ValueError("Missing or invalid 'metadata_server' in config")
-
                 if "://" not in raw_address:
                     raw_address = "//" + raw_address
 
@@ -120,8 +127,10 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
 
                 cmd = [
                     "mooncake_master",
-                    "-default_kv_lease_ttl=0",
-                    "-default_kv_soft_pin_ttl=0",
+                    "-default_kv_lease_ttl=999",
+                    "-default_kv_soft_pin_ttl=999",
+                    "--eviction_high_watermark_ratio=1.0",
+                    "--eviction_ratio=0.0",
                     "--enable_http_metadata_server=true",
                     "--allow_evict_soft_pinned_objects=false",
                     f"--http_metadata_server_host={metadata_server_host}",
@@ -129,11 +138,17 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
                 ]
 
                 log_file_path = "/tmp/mooncake_master.log"
+                log_file = open(log_file_path, "w")
 
-                with open(log_file_path, "w") as log_file:
-                    process = subprocess.Popen(
-                        cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True
-                    )
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                    start_new_session=True,
+                )
 
                 time.sleep(3)
 
@@ -153,7 +168,6 @@ def _maybe_create_transferqueue_storage(conf: DictConfig) -> DictConfig:
                         f"mooncake_master exited with error. Check {log_file_path} for detailed logs. "
                         f"Output:\n{error_msg}"
                     )
-
                 _TRANSFER_QUEUE_STORAGE["MooncakeStore"] = process
     return conf
 
@@ -303,13 +317,20 @@ def close():
                     for storage in value.values():
                         ray.kill(storage)
                 elif key == "MooncakeStore":
+                    import signal
+
                     process = value
                     if process and process.poll() is None:
-                        process.terminate()
                         try:
-                            process.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
+                            pgid = os.getpgid(process.pid)
+                            os.killpg(pgid, signal.SIGTERM)
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                os.killpg(pgid, signal.SIGKILL)
+                                process.wait(timeout=5)
+                        except ProcessLookupError:
+                            logger.warning(f"MooncakeStore process already exited: pid={process.pid}")
                 else:
                     logger.warning(f"close for _TRANSFER_QUEUE_STORAGE with key {key} is not supported for now.")
 

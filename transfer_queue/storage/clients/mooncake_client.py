@@ -239,10 +239,11 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             keys (List[str]): List of keys to remove.
             custom_backend_meta (List[Any], optional): ...
         """
-        for key in keys:
-            ret = self._store.remove(key)
-            if ret != 0:
-                logger.warning(f"remove failed for key '{key}' with error code: {ret}")
+        global_indexes = [key.split("@")[0] + "@*" for key in keys]
+        for gid in global_indexes:
+            ret = self._store.remove_by_regex(gid, force=True)
+            if ret < 0:
+                logger.warning(f"remove failed for key '{gid}' with error code: {ret}")
 
     def close(self):
         """Closes MooncakeStore."""
