@@ -19,8 +19,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
@@ -55,15 +53,9 @@ def test_data_partition_status():
     success = partition.update_production_status(
         global_indices=[0, 1, 2],
         field_names=["input_ids", "attention_mask"],
-        dtypes={
-            0: {"input_ids": "torch.int32", "attention_mask": "torch.bool"},
-            1: {"input_ids": "torch.int32", "attention_mask": "torch.bool"},
-            2: {"input_ids": "torch.int32", "attention_mask": "torch.bool"},
-        },
-        shapes={
-            0: {"input_ids": (512,), "attention_mask": (512,)},
-            1: {"input_ids": (512,), "attention_mask": (512,)},
-            2: {"input_ids": (512,), "attention_mask": (512,)},
+        field_schema={
+            "input_ids": {"dtype": "torch.int32", "shape": (512,), "is_nested": False, "is_non_tensor": False},
+            "attention_mask": {"dtype": "torch.bool", "shape": (512,), "is_nested": False, "is_non_tensor": False},
         },
         custom_backend_meta=None,
     )
@@ -78,10 +70,10 @@ def test_data_partition_status():
     print("✓ Dynamic expansion works")
 
     # Test field metadata retrieval
-    dtype = partition.get_field_dtype(0, "input_ids")
-    shape = partition.get_field_shape(1, "attention_mask")
-    assert dtype == "torch.int32"
-    assert shape == (512,)
+    assert "input_ids" in partition.field_metadata
+    assert partition.field_metadata["input_ids"].dtype == "torch.int32"
+    assert "attention_mask" in partition.field_metadata
+    assert partition.field_metadata["attention_mask"].shape == (512,)
 
     print("✓ Field metadata retrieval works")
 
@@ -164,16 +156,9 @@ def test_dynamic_expansion_scenarios():
     # Scenario 1: Adding samples with large gaps
     partition.update_production_status(
         global_indices=[0, 5, 10],
-        field_names=["field1"],
-        dtypes={
-            0: {"field_1": "torch.bool"},
-            5: {"field_1": "torch.bool"},
-            10: {"field_1": "torch.bool"},
-        },
-        shapes={
-            0: {"field_1": (32,)},
-            5: {"field_1": (32,)},
-            10: {"field_1": (32,)},
+        field_names=["field_1"],
+        field_schema={
+            "field_1": {"dtype": "torch.bool", "shape": (32,)},
         },
         custom_backend_meta=None,
     )
@@ -184,11 +169,13 @@ def test_dynamic_expansion_scenarios():
     # Scenario 2: Adding many fields dynamically
     for i in range(15):
         partition.update_production_status(
-            [0], [f"field_{i}"], {0: {f"field_{i}": "torch.bool"}}, {0: {f"field_{i}": (32,)}}, None
+            [0],
+            [f"field_{i}"],
+            field_schema={f"field_{i}": {"dtype": "torch.bool", "shape": (32,)}},
         )
 
-    assert partition.total_fields_num == 16  # Original + 15 new fields
-    assert partition.allocated_fields_num >= 16
+    assert partition.total_fields_num == 15  # field_1 from Scenario 1 + field_0..field_14 (field_1 overlaps)
+    assert partition.allocated_fields_num >= 15
 
     print("✓ Dynamic field expansion works")
 
@@ -224,9 +211,12 @@ def test_data_partition_status_advanced():
     assert partition.allocated_fields_num == TQ_INIT_FIELD_NUM
 
     # Add data to trigger expansion
-    dtypes = {i: {f"dynamic_field_{s}": "torch.bool" for s in ["a", "b", "c"]} for i in range(5)}
-    shapes = {i: {f"dynamic_field_{s}": (32,) for s in ["a", "b", "c"]} for i in range(5)}
-    partition.update_production_status([0, 1, 2, 3, 4], ["field_a", "field_b", "field_c"], dtypes, shapes, None)
+    field_schema = {f"dynamic_field_{s}": {"dtype": "torch.bool", "shape": (32,)} for s in ["a", "b", "c"]}
+    partition.update_production_status(
+        [0, 1, 2, 3, 4],
+        ["dynamic_field_a", "dynamic_field_b", "dynamic_field_c"],
+        field_schema=field_schema,
+    )
 
     # Properties should reflect current state
     assert partition.total_samples_num >= 5  # At least 5 samples
@@ -245,19 +235,11 @@ def test_data_partition_status_advanced():
     assert initial_consumption[1] == 1
 
     # Expand samples and verify consumption data preserved
-    dtypes = (
-        {
-            10: {"field_d": "torch.bool"},
-            11: {"field_d": "torch.bool"},
-            12: {"field_d": "torch.bool"},
-        },
+    partition.update_production_status(
+        [10, 11, 12],
+        ["field_d"],
+        field_schema={"field_d": {"dtype": "torch.bool", "shape": (32,)}},
     )
-    shapes = {
-        10: {"field_d": (32,)},
-        11: {"field_d": (32,)},
-        12: {"field_d": (32,)},
-    }
-    partition.update_production_status([10, 11, 12], ["field_d"], dtypes, shapes, None)  # Triggers sample expansion
     global_index, expanded_consumption = partition.get_consumption_status(task_name)
     assert expanded_consumption[0] == 1  # Preserved
     assert expanded_consumption[1] == 1  # Preserved
@@ -267,15 +249,16 @@ def test_data_partition_status_advanced():
 
     # Test 3: Complex field addition scenarios
     # Start with some fields
-    dtypes = {0: {"initial_field": "torch.bool"}}
-    shapes = {0: {"field_d": (32,)}}
-    partition.update_production_status([0], ["initial_field"], dtypes, shapes, None)
+    partition.update_production_status(
+        [0],
+        ["initial_field"],
+        field_schema={"initial_field": {"dtype": "torch.bool", "shape": (32,)}},
+    )
 
     # Add many fields to trigger column expansion
     new_fields = [f"dynamic_field_{i}" for i in range(20)]
-    dtypes = {1: {f"dynamic_field_{i}": "torch.bool" for i in range(20)}}
-    shapes = {1: {f"dynamic_field_{i}": (32,) for i in range(20)}}
-    partition.update_production_status([1], new_fields, dtypes, shapes, None)
+    field_schema = {f"dynamic_field_{i}": {"dtype": "torch.bool", "shape": (32,)} for i in range(20)}
+    partition.update_production_status([1], new_fields, field_schema=field_schema)
 
     # Verify all fields are registered and accessible
     assert "initial_field" in partition.field_name_mapping
@@ -347,11 +330,8 @@ def test_edge_cases_and_error_handling():
     print("✓ Empty partition operations handled gracefully")
 
     # Test 2: Field metadata operations
-    # Test metadata retrieval for non-existent samples/fields
-    dtype = partition.get_field_dtype(999, "nonexistent_field")
-    shape = partition.get_field_shape(999, "nonexistent_field")
-    assert dtype is None
-    assert shape is None
+    # Test metadata retrieval for non-existent fields
+    assert "nonexistent_field" not in partition.field_metadata
 
     print("✓ Metadata retrieval for non-existent data handled correctly")
 
@@ -364,13 +344,12 @@ def test_edge_cases_and_error_handling():
 
     # Test 4: Production status update error conditions
     # Test with empty lists
-    success = partition.update_production_status([], [], [], [])
+    success = partition.update_production_status([], [], {}, {})
     assert success  # Should handle empty lists gracefully
 
     # Test with valid data but ensure no crashes
-    dtypes = {0: {"new_field": "torch.int64"}}
-    shapes = {0: {"new_field": (32,)}}
-    success = partition.update_production_status([0], ["new_field"], dtypes=dtypes, shapes=shapes)
+    field_schema = {"new_field": {"dtype": "torch.int64", "shape": (32,)}}
+    success = partition.update_production_status([0], ["new_field"], field_schema=field_schema)
     assert success
 
     print("✓ Production status update edge cases handled correctly")
@@ -390,9 +369,8 @@ def test_performance_characteristics():
     start_time = time.time()
     field_count = 100  # Reduced from 1000 to avoid potential issues
     many_fields = [f"perf_field_{i}" for i in range(field_count)]
-    dtypes = {0: {f"perf_field_{i}": "torch.bool" for i in range(field_count)}}
-    shapes = {0: {f"perf_field_{i}": (32,) for i in range(field_count)}}
-    partition.update_production_status([0], many_fields, dtypes, shapes)
+    field_schema = {f"perf_field_{i}": {"dtype": "torch.bool", "shape": (32,)} for i in range(field_count)}
+    partition.update_production_status([0], many_fields, field_schema)
     field_creation_time = time.time() - start_time
 
     assert partition.total_fields_num == field_count
@@ -402,9 +380,8 @@ def test_performance_characteristics():
     # Test 2: Large number of samples
     start_time = time.time()
     many_samples = list(range(5000))
-    dtypes = {k: {"test_field": "torch.int64"} for k in many_samples}
-    shapes = {k: {"test_field": (32,)} for k in many_samples}
-    partition.update_production_status(many_samples, ["test_field"], dtypes=dtypes, shapes=shapes)
+    field_schema = {"test_field": {"dtype": "torch.int64", "shape": (32,)}}
+    partition.update_production_status(many_samples, ["test_field"], field_schema=field_schema)
     sample_creation_time = time.time() - start_time
 
     assert partition.total_samples_num >= 5000
@@ -430,9 +407,8 @@ def test_performance_characteristics():
     initial_samples = partition.total_samples_num
 
     # Add more data (should reuse existing space where possible)
-    dtypes = {100: {"new_field": "torch.int64"}}
-    shapes = {100: {"new_field": (32,)}}
-    partition.update_production_status([100], ["new_field"], dtypes=dtypes, shapes=shapes)
+    field_schema = {"new_field": {"dtype": "torch.int64", "shape": (32,)}}
+    partition.update_production_status([100], ["new_field"], field_schema=field_schema)
 
     # Memory growth should be reasonable
     final_allocated = partition.allocated_fields_num
@@ -459,8 +435,10 @@ def test_custom_meta_in_data_partition_status():
     # First, set up production status
     global_indices = [0, 1, 2]
     field_names = ["input_ids", "attention_mask"]
-    dtypes = {i: {"input_ids": "torch.int32", "attention_mask": "torch.bool"} for i in global_indices}
-    shapes = {i: {"input_ids": (512,), "attention_mask": (512,)} for i in global_indices}
+    field_schema = {
+        "input_ids": {"dtype": "torch.int32", "shape": (512,)},
+        "attention_mask": {"dtype": "torch.bool", "shape": (512,)},
+    }
 
     # custom_backend_meta goes to field_custom_backend_meta (per-sample per-field metadata)
     custom_backend_meta = {
@@ -472,8 +450,7 @@ def test_custom_meta_in_data_partition_status():
     success = partition.update_production_status(
         global_indices=global_indices,
         field_names=field_names,
-        dtypes=dtypes,
-        shapes=shapes,
+        field_schema=field_schema,
         custom_backend_meta=custom_backend_meta,
     )
 
@@ -510,39 +487,56 @@ def test_custom_meta_in_data_partition_status():
     print("✓ Custom_meta and custom_backend_meta tests passed")
 
 
-def test_update_field_metadata_variants():
-    """Test _update_field_metadata handles dtypes/shapes/custom_backend_meta being optional and merging."""
-    from transfer_queue.controller import DataPartitionStatus
+class TestUpdateFieldMetadata:
+    """Unit tests for _update_field_metadata with columnar field_schema."""
 
-    partition = DataPartitionStatus(partition_id="update_meta_test")
+    def _make_partition(self):
+        from transfer_queue.controller import DataPartitionStatus
 
-    # Only dtypes provided
-    global_indices = [0, 1]
-    dtypes = {0: {"f1": "torch.int32"}, 1: {"f1": "torch.bool"}}
+        return DataPartitionStatus(partition_id="update_meta_test")
 
-    partition._update_field_metadata(global_indices, dtypes, shapes=None, custom_backend_meta=None)
-    assert partition.field_dtypes[0]["f1"] == "torch.int32"
-    assert partition.field_dtypes[1]["f1"] == "torch.bool"
-    assert partition.field_shapes == {}
-    assert partition.field_custom_backend_meta == {}
+    def test_basic_write_and_incremental_add(self):
+        partition = self._make_partition()
+        partition._update_field_metadata([0, 1], {"f1": {"dtype": "torch.int32", "shape": (16,)}})
+        assert partition.field_metadata["f1"].dtype == "torch.int32"
+        assert partition.field_metadata["f1"].shape == (16,)
 
-    # Only shapes provided for a new index
-    partition._update_field_metadata([2], dtypes=None, shapes={2: {"f2": (16,)}}, custom_backend_meta=None)
-    assert partition.field_shapes[2]["f2"] == (16,)
+        partition._update_field_metadata([2], {"f2": {"dtype": "torch.float32", "shape": (256,)}})
+        assert partition.field_metadata["f2"].dtype == "torch.float32"
 
-    # Only custom_backend_meta provided and merged with existing entries
-    partition._update_field_metadata([2], dtypes=None, shapes=None, custom_backend_meta={2: {"f2": {"meta": 1}}})
-    assert 2 in partition.field_custom_backend_meta
-    assert partition.field_custom_backend_meta[2]["f2"]["meta"] == 1
+    def test_dtype_conflict_raises_error(self):
+        partition = self._make_partition()
+        partition._update_field_metadata([0], {"f1": {"dtype": "torch.int32", "shape": (16,)}})
+        import pytest
 
-    # Merging dtypes on an existing index should preserve previous keys
-    partition._update_field_metadata([0], dtypes={0: {"f2": "torch.float32"}}, shapes=None, custom_backend_meta=None)
-    assert partition.field_dtypes[0]["f1"] == "torch.int32"
-    assert partition.field_dtypes[0]["f2"] == "torch.float32"
+        with pytest.raises(ValueError, match="dtype mismatch"):
+            partition._update_field_metadata([1], {"f1": {"dtype": "torch.float64", "shape": (16,)}})
 
-    # Length mismatch should raise ValueError when provided mapping lengths differ from global_indices
-    with pytest.raises(ValueError):
-        partition._update_field_metadata([0, 1, 2], dtypes={0: {}}, shapes=None, custom_backend_meta=None)
+    def test_shape_conflict_promotes_to_nested(self):
+        partition = self._make_partition()
+        partition._update_field_metadata([0], {"f2": {"dtype": "torch.float32", "shape": (256,)}})
+        partition._update_field_metadata([1], {"f2": {"dtype": "torch.float32", "shape": (128,)}})
+        assert partition.field_metadata["f2"].is_nested is True
+        assert partition.field_metadata["f2"].shape is None
+
+    def test_nested_per_sample_shapes(self):
+        partition = self._make_partition()
+        schema = {"f3": {"dtype": "torch.float32", "shape": None, "is_nested": True, "per_sample_shapes": [(3,), (5,)]}}
+        partition._update_field_metadata([10, 11], schema)
+        assert partition.field_metadata["f3"].is_nested is True
+        assert partition.field_metadata["f3"].per_sample_shapes == {10: (3,), 11: (5,)}
+
+    def test_custom_backend_meta(self):
+        partition = self._make_partition()
+        partition._update_field_metadata(
+            [2], {"f1": {"dtype": "torch.int32"}}, custom_backend_meta={2: {"f1": {"k": 1}}}
+        )
+        assert partition.field_custom_backend_meta[2]["f1"]["k"] == 1
+
+    def test_empty_global_indexes_is_noop(self):
+        partition = self._make_partition()
+        partition._update_field_metadata([], {}, custom_backend_meta=None)
+        assert partition.field_metadata == {}
 
 
 def test_get_production_status_for_fields():
@@ -559,8 +553,10 @@ def test_get_production_status_for_fields():
     partition.update_production_status(
         global_indices=[0, 1, 2, 3, 9],
         field_names=["field_a", "field_b"],
-        dtypes={i: {"field_a": "torch.int64", "field_b": "torch.bool"} for i in [0, 1, 2, 3, 9]},
-        shapes={i: {"field_a": (32,), "field_b": (32,)} for i in [0, 1, 2, 3, 9]},
+        field_schema={
+            "field_a": {"dtype": "torch.int64", "shape": (32,)},
+            "field_b": {"dtype": "torch.bool", "shape": (32,)},
+        },
     )
 
     # Test get_production_status_for_fields WITHOUT mask (mask=False)
@@ -621,15 +617,13 @@ def test_get_consumption_status_parameter():
     partition.update_production_status(
         global_indices=[0, 1, 2, 3, 9],
         field_names=["field_a"],
-        dtypes={i: {"field_a": "torch.int64"} for i in [0, 1, 2, 3, 9]},
-        shapes={i: {"field_a": (32,)} for i in [0, 1, 2, 3, 9]},
+        field_schema={"field_a": {"dtype": "torch.int64", "shape": (32,)}},
     )
 
     partition_another.update_production_status(
         global_indices=[5, 6, 7],
         field_names=["field_a"],
-        dtypes={i: {"field_a": "torch.int64"} for i in [5, 6, 7]},
-        shapes={i: {"field_a": (32,)} for i in [5, 6, 7]},
+        field_schema={"field_a": {"dtype": "torch.int64", "shape": (32,)}},
     )
 
     # Mark some samples as consumed
@@ -782,8 +776,7 @@ def test_pre_allocated_indexes_in_scan_data_status():
     partition.update_production_status(
         global_indices=[0, 2, 4],
         field_names=["input_ids"],
-        dtypes={i: {"input_ids": "torch.int32"} for i in [0, 2, 4]},
-        shapes={i: {"input_ids": (32,)} for i in [0, 2, 4]},
+        field_schema={"input_ids": {"dtype": "torch.int32", "shape": (32,)}},
     )
 
     # Scan should return produced and unconsumed samples
@@ -820,8 +813,7 @@ def test_pre_allocated_indexes_mixed_with_dynamic():
     partition.update_production_status(
         global_indices=[5, 6, 7],
         field_names=["input_ids"],
-        dtypes={i: {"input_ids": "torch.int32"} for i in [5, 6, 7]},
-        shapes={i: {"input_ids": (32,)} for i in [5, 6, 7]},
+        field_schema={"input_ids": {"dtype": "torch.int32", "shape": (32,)}},
     )
 
     # Now global_indexes should only contain dynamically generated in (5,6,7)
@@ -929,8 +921,7 @@ class TestDataPartitionStatusCustomMeta:
         partition.update_production_status(
             global_indices=[0, 1],
             field_names=["input_ids"],
-            dtypes={0: {"input_ids": "torch.int32"}, 1: {"input_ids": "torch.int32"}},
-            shapes={0: {"input_ids": (512,)}, 1: {"input_ids": (512,)}},
+            field_schema={"input_ids": {"dtype": "torch.int32", "shape": (512,)}},
         )
         partition.set_custom_meta({0: {"score": 0.9}, 1: {"score": 0.8}})
 
@@ -1055,3 +1046,65 @@ class TestDataPartitionStatusKvInterface:
         keys = partition.kv_retrieve_keys([10, 30])
 
         assert keys == ["key_1", "key_3"]
+
+
+class TestFieldMeta:
+    """Unit tests for FieldMeta dataclass."""
+
+    def test_remove_samples(self):
+        from transfer_queue.controller import FieldMeta
+
+        fm = FieldMeta(is_nested=True)
+        fm.per_sample_shapes = {0: (3,), 1: (5,), 2: (7,)}
+        fm.remove_samples([0, 2])
+        assert fm.per_sample_shapes == {1: (5,)}
+        # Removing non-existent index should not raise
+        fm.remove_samples([99])
+        assert fm.per_sample_shapes == {1: (5,)}
+
+    def test_to_batch_schema_regular(self):
+        from transfer_queue.controller import FieldMeta
+
+        fm = FieldMeta(dtype="torch.float32", shape=(512,), is_nested=False, is_non_tensor=False)
+        schema = fm.to_batch_schema([0, 1, 2])
+        assert schema == {
+            "dtype": "torch.float32",
+            "shape": (512,),
+            "is_nested": False,
+            "is_non_tensor": False,
+        }
+        assert "per_sample_shapes" not in schema
+
+    def test_to_batch_schema_nested(self):
+        from transfer_queue.controller import FieldMeta
+
+        fm = FieldMeta(dtype="torch.float32", shape=None, is_nested=True)
+        fm.per_sample_shapes = {0: (3,), 1: (5,), 2: (7,)}
+        schema = fm.to_batch_schema([0, 2, 1])
+        assert schema["is_nested"] is True
+        assert schema["per_sample_shapes"] == [(3,), (7,), (5,)]
+
+    def test_to_batch_schema_nested_missing_sample(self):
+        from transfer_queue.controller import FieldMeta
+
+        fm = FieldMeta(dtype="torch.float32", shape=None, is_nested=True)
+        fm.per_sample_shapes = {0: (3,)}
+        schema = fm.to_batch_schema([0, 1])
+        assert schema["per_sample_shapes"] == [(3,), None]
+
+    def test_update_dtype_conflict(self):
+        import pytest
+
+        from transfer_queue.controller import FieldMeta
+
+        fm = FieldMeta(dtype="torch.int32", shape=(16,))
+        with pytest.raises(ValueError, match="dtype mismatch"):
+            fm.update({"dtype": "torch.float64"})
+
+    def test_update_shape_conflict_promotes_nested(self):
+        from transfer_queue.controller import FieldMeta
+
+        fm = FieldMeta(dtype="torch.float32", shape=(256,))
+        fm.update({"dtype": "torch.float32", "shape": (128,)})
+        assert fm.is_nested is True
+        assert fm.shape is None

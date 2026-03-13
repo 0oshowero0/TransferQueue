@@ -194,10 +194,8 @@ class TransferQueueStorageManager(ABC):
     async def notify_data_update(
         self,
         partition_id: str,
-        fields: list[str],
         global_indexes: list[int],
-        dtypes: dict[int, dict[str, Any]],
-        shapes: dict[int, dict[str, Any]],
+        field_schema: dict[str, dict[str, Any]],
         custom_backend_meta: Optional[dict[int, dict[str, Any]]] = None,
     ) -> None:
         """
@@ -205,10 +203,8 @@ class TransferQueueStorageManager(ABC):
 
         Args:
             partition_id: Current data partition id.
-            fields: Data update related fields.
             global_indexes: Data update related global_indexes.
-            dtypes: Per-field dtypes for each field, in {global_index: {field: dtype}} format.
-            shapes: Per-field shapes for each field, in {global_index: {field: shape}} format.
+            field_schema: Columnar field schema {field_name: {dtype, shape, is_nested, ...}}.
             custom_backend_meta: Per-field custom_meta for each sample, in {global_index: {field: custom_meta}} format.
         """
 
@@ -228,10 +224,8 @@ class TransferQueueStorageManager(ABC):
                 sender_id=self.storage_manager_id,
                 body={
                     "partition_id": partition_id,
-                    "fields": fields,
                     "global_indexes": global_indexes,
-                    "dtypes": dtypes,
-                    "shapes": shapes,
+                    "field_schema": field_schema,
                     "custom_backend_meta": custom_backend_meta,
                 },
             ).serialize()
@@ -623,35 +617,10 @@ class KVStorageManager(TransferQueueStorageManager):
         # Get current data partition id
         partition_id = metadata.partition_ids[0]
 
-        per_field_dtypes: dict[int, dict[str, Any]] = {}
-        per_field_shapes: dict[int, dict[str, Any]] = {}
-        for field_name, field_meta in field_schema.items():
-            is_nested = field_meta.get("is_nested", False)
-
-            if is_nested:
-                per_sample_shapes = field_meta.get("per_sample_shapes", [])
-                for i, global_idx in enumerate(metadata.global_indexes):
-                    if global_idx not in per_field_dtypes:
-                        per_field_dtypes[global_idx] = {}
-                        per_field_shapes[global_idx] = {}
-                    per_field_dtypes[global_idx][field_name] = field_meta.get("dtype")
-                    per_field_shapes[global_idx][field_name] = (
-                        per_sample_shapes[i] if i < len(per_sample_shapes) else None
-                    )
-            else:
-                for global_idx in metadata.global_indexes:
-                    if global_idx not in per_field_dtypes:
-                        per_field_dtypes[global_idx] = {}
-                        per_field_shapes[global_idx] = {}
-                    per_field_dtypes[global_idx][field_name] = field_meta.get("dtype")
-                    per_field_shapes[global_idx][field_name] = field_meta.get("shape")
-
         await self.notify_data_update(
             partition_id,
-            list(data.keys()),
             metadata.global_indexes,
-            per_field_dtypes,
-            per_field_shapes,
+            field_schema,
             per_field_custom_backend_meta,
         )
 

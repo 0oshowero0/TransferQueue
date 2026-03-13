@@ -22,7 +22,7 @@ import pytest
 import pytest_asyncio
 import torch
 import zmq
-from tensordict import TensorDict
+from tensordict import NonTensorStack, TensorDict
 
 # Setup path
 parent_dir = Path(__file__).resolve().parent.parent
@@ -380,8 +380,8 @@ async def test_hash_routing_stable_across_batch_sizes():
 
     # Build per-index mapping from the full-batch result
     idx_to_su_full: dict[int, str] = {}
-    for su_id, gi_list in full_routing.items():
-        for gi in gi_list:
+    for su_id, group in full_routing.items():
+        for gi in group.global_indexes:
             idx_to_su_full[gi] = su_id
 
     # Route as two batches of 5
@@ -389,16 +389,22 @@ async def test_hash_routing_stable_across_batch_sizes():
     batch_b_routing = manager._group_by_hash(all_indexes[5:])
 
     idx_to_su_split: dict[int, str] = {}
-    for su_id, gi_list in batch_a_routing.items():
-        for gi in gi_list:
+    for su_id, group in batch_a_routing.items():
+        for gi in group.global_indexes:
             idx_to_su_split[gi] = su_id
-    for su_id, gi_list in batch_b_routing.items():
-        for gi in gi_list:
+    for su_id, group in batch_b_routing.items():
+        for gi in group.global_indexes:
             idx_to_su_split[gi] = su_id
 
     assert idx_to_su_full == idx_to_su_split, (
         f"Routing differs between full batch and split batches:\n  full:  {idx_to_su_full}\n  split: {idx_to_su_split}"
     )
+
+    # Verify RoutingGroup carries correct batch_positions alongside global_indexes
+    for su_id, group in full_routing.items():
+        assert len(group.global_indexes) == len(group.batch_positions)
+        for gi, pos in zip(group.global_indexes, group.batch_positions, strict=False):
+            assert all_indexes[pos] == gi
 
 
 @pytest.mark.asyncio
@@ -439,9 +445,71 @@ async def test_hash_routing_stable_reversed_order():
     # Build per-index mapping
     def _to_idx_map(routing):
         m = {}
-        for su_id, gi_list in routing.items():
-            for gi in gi_list:
+        for su_id, group in routing.items():
+            for gi in group.global_indexes:
                 m[gi] = su_id
         return m
 
     assert _to_idx_map(routing_fwd) == _to_idx_map(routing_rev), "Hash routing should be order-independent"
+
+
+class TestSelectByPositions:
+    """Test _select_by_positions static method for all field types."""
+
+    def test_regular_tensor(self):
+        t = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        result = AsyncSimpleStorageManager._select_by_positions(t, [0, 2])
+        assert torch.equal(result, torch.tensor([[1.0, 2.0], [5.0, 6.0]]))
+
+    def test_nested_tensor(self):
+        t = torch.nested.as_nested_tensor(
+            [torch.tensor([1.0]), torch.tensor([2.0, 3.0]), torch.tensor([4.0, 5.0, 6.0])],
+            layout=torch.jagged,
+        )
+        result = AsyncSimpleStorageManager._select_by_positions(t, [0, 2])
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert torch.equal(result[0], torch.tensor([1.0]))
+        assert torch.equal(result[1], torch.tensor([4.0, 5.0, 6.0]))
+
+    def test_non_tensor_stack(self):
+        nts = NonTensorStack("a", "b", "c")
+        result = AsyncSimpleStorageManager._select_by_positions(nts, [1, 2])
+        assert isinstance(result, NonTensorStack)
+        assert result.tolist() == ["b", "c"]
+
+    def test_list(self):
+        data = [{"x": 1}, {"x": 2}, {"x": 3}]
+        result = AsyncSimpleStorageManager._select_by_positions(data, [0, 2])
+        assert result == [{"x": 1}, {"x": 3}]
+
+    def test_numpy_array(self):
+        arr = np.array([10, 20, 30])
+        result = AsyncSimpleStorageManager._select_by_positions(arr, [0, 2])
+        np.testing.assert_array_equal(result, np.array([10, 30]))
+
+
+class TestPackFieldValues:
+    """Test _pack_field_values static method packing logic."""
+
+    def test_uniform_tensors_to_stack(self):
+        """Same-shape tensors → torch.stack."""
+        values = [torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])]
+        result = AsyncSimpleStorageManager._pack_field_values(values)
+        assert isinstance(result, torch.Tensor)
+        assert not result.is_nested
+        assert result.shape == (2, 2)
+
+    def test_variable_length_tensors_to_nested(self):
+        """Different-shape tensors → nested tensor."""
+        values = [torch.tensor([1.0]), torch.tensor([2.0, 3.0])]
+        result = AsyncSimpleStorageManager._pack_field_values(values)
+        assert isinstance(result, torch.Tensor)
+        assert result.is_nested
+
+    def test_non_tensors_to_nontensorstack(self):
+        """Non-tensor values → NonTensorStack."""
+        values = ["hello", "world"]
+        result = AsyncSimpleStorageManager._pack_field_values(values)
+        assert isinstance(result, NonTensorStack)
+        assert result.tolist() == ["hello", "world"]

@@ -257,6 +257,50 @@ class BatchMeta:
         """Check if all samples in this batch are ready for consumption"""
         return getattr(self, "_is_ready", False)
 
+    def get_dtypes(self, field_name: str) -> list:
+        """Return a per-sample list of dtypes for the given field.
+
+        Since dtype is uniform across all samples in a field, the returned list
+        contains the same dtype repeated ``self.size`` times.
+
+        Args:
+            field_name: Name of the field to query.
+
+        Returns:
+            A list of length ``self.size`` where each element is the field's dtype.
+
+        Raises:
+            KeyError: If *field_name* is not present in ``field_schema``.
+        """
+        if field_name not in self.field_schema:
+            raise KeyError(f"Field '{field_name}' not found in field_schema")
+        dtype = self.field_schema[field_name].get("dtype")
+        return [dtype] * self.size
+
+    def get_shapes(self, field_name: str) -> list:
+        """Return a per-sample list of shapes for the given field.
+
+        For nested-tensor fields the shapes come from ``per_sample_shapes``.
+        For regular (non-nested) fields the uniform ``shape`` is repeated
+        ``self.size`` times so the caller always gets one entry per sample.
+
+        Args:
+            field_name: Name of the field to query.
+
+        Returns:
+            A list of length ``self.size`` where each element is a shape tuple.
+
+        Raises:
+            KeyError: If *field_name* is not present in ``field_schema``.
+        """
+        if field_name not in self.field_schema:
+            raise KeyError(f"Field '{field_name}' not found in field_schema")
+        meta = self.field_schema[field_name]
+        per_sample = meta.get("per_sample_shapes")
+        if per_sample is not None:
+            return list(per_sample)
+        return [meta.get("shape")] * self.size
+
     # ==================== Extra Info Methods ====================
 
     def get_extra_info(self, key: str, default: Any = None) -> Any:
@@ -449,45 +493,6 @@ class BatchMeta:
             _custom_backend_meta=selected_custom_backend_meta,
         )
 
-    def with_data_fields(self, field_names: list[str]) -> "BatchMeta":
-        """Return a new BatchMeta with the given data fields, replacing the current field_schema.
-
-        Unlike ``select_fields``, this method allows specifying field names that are not
-        yet present in the current ``field_schema`` (e.g. fields added by a subsequent
-        ``put`` call on a subset of samples).  Unknown fields are included in the new
-        ``field_schema`` with an empty metadata dict so that ``get_data`` can retrieve
-        them from the storage backend.
-
-        Args:
-            field_names (list[str]): List of field names to request. May include fields
-                not present in the current ``field_schema``.
-
-        Returns:
-            BatchMeta: A new BatchMeta instance whose ``field_schema`` contains exactly
-            the requested fields (existing metadata is preserved where available).
-        """
-        new_field_schema = {}
-        for field_name in field_names:
-            if field_name in self.field_schema:
-                new_field_schema[field_name] = copy.deepcopy(self.field_schema[field_name])
-            else:
-                # Unknown field — include with empty schema so get_data can fetch it.
-                new_field_schema[field_name] = {}
-
-        selected_custom_backend_meta = [
-            {f: v for f, v in m.items() if f.startswith("_") or f in field_names} for m in self._custom_backend_meta
-        ]
-
-        return BatchMeta(
-            global_indexes=self.global_indexes,
-            partition_ids=self.partition_ids,
-            field_schema=new_field_schema,
-            production_status=self.production_status.copy(),
-            extra_info=copy.deepcopy(self.extra_info),
-            custom_meta=copy.deepcopy(self.custom_meta),
-            _custom_backend_meta=selected_custom_backend_meta,
-        )
-
     def __len__(self) -> int:
         """Return the number of samples in this batch."""
         return self.size
@@ -615,22 +620,16 @@ class BatchMeta:
                         f"Missing from chunk: {set(base_fields) - set(chunk.field_names)}"
                     )
 
-            # Validate field_schema dtype and is_nested consistency across chunks
+            # Validate field_schema dtype consistency across chunks
             for field_name in base_fields:
                 base_meta = data[0].field_schema.get(field_name, {})
                 base_dtype = base_meta.get("dtype")
-                base_is_nested = base_meta.get("is_nested", False)
                 for i, chunk in enumerate(data[1:], start=1):
                     chunk_meta = chunk.field_schema.get(field_name, {})
                     if chunk_meta.get("dtype") != base_dtype:
                         raise ValueError(
                             f"Field '{field_name}' dtype mismatch in concat: "
                             f"chunk[0]={base_dtype}, chunk[{i}]={chunk_meta.get('dtype')}"
-                        )
-                    if chunk_meta.get("is_nested", False) != base_is_nested:
-                        raise ValueError(
-                            f"Field '{field_name}' is_nested mismatch in concat: "
-                            f"chunk[0]={base_is_nested}, chunk[{i}]={chunk_meta.get('is_nested', False)}"
                         )
 
         all_global_indexes = list(itertools.chain.from_iterable(chunk.global_indexes for chunk in data))
@@ -641,13 +640,21 @@ class BatchMeta:
         all_field_schema: dict[str, dict[str, Any]] = {}
         first_chunk = data[0]
         for field_name, meta in first_chunk.field_schema.items():
+            # Check if any chunk marks this field as nested
+            any_nested = any(chunk.field_schema.get(field_name, {}).get("is_nested", False) for chunk in data)
+            merged_is_nested = meta.get("is_nested", False) or any_nested
+
             all_field_schema[field_name] = {
                 "dtype": meta.get("dtype"),
-                "shape": meta.get("shape"),
-                "is_nested": meta.get("is_nested", False),
+                "shape": None if merged_is_nested else meta.get("shape"),
+                "is_nested": merged_is_nested,
                 "is_non_tensor": meta.get("is_non_tensor", False),
             }
-            if any(chunk.field_schema.get(field_name, {}).get("per_sample_shapes") for chunk in data):
+
+            # Build per_sample_shapes when the merged field is nested or any chunk already has them
+            if merged_is_nested or any(
+                chunk.field_schema.get(field_name, {}).get("per_sample_shapes") for chunk in data
+            ):
                 all_shapes = []
                 for chunk in data:
                     chunk_meta = chunk.field_schema.get(field_name, {})
@@ -655,7 +662,9 @@ class BatchMeta:
                     if chunk_shapes:
                         all_shapes.extend(chunk_shapes)
                     else:
-                        all_shapes.extend([None] * chunk.size)
+                        # Non-nested chunk: expand the uniform shape for each sample
+                        uniform_shape = chunk_meta.get("shape")
+                        all_shapes.extend([uniform_shape] * chunk.size)
                 all_field_schema[field_name]["per_sample_shapes"] = all_shapes
 
         all_custom_meta: list[dict[str, Any]] = []

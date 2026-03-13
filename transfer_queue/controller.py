@@ -193,6 +193,78 @@ class PartitionIndexManager:
 
 
 @dataclass
+class FieldMeta:
+    """
+    Single source of truth for one field's metadata in a partition.
+
+    Field-level attributes (dtype/shape/is_nested/is_non_tensor) are shared across all samples, O(1) storage.
+    Sample-level attributes (per_sample_shapes) are only needed for nested tensors,
+    indexed by global_idx, O(B_nested) storage.
+    """
+
+    dtype: Any = None
+    shape: Optional[tuple] = None  # None when is_nested=True
+    is_nested: bool = False
+    is_non_tensor: bool = False
+
+    per_sample_shapes: dict[int, tuple] = field(default_factory=dict)  # {global_idx: shape}
+
+    def update(self, incoming: dict[str, Any]) -> None:
+        """Update this field's metadata from an incoming schema dict.
+
+        Encapsulates dtype consistency check, shape conflict detection,
+        and automatic is_nested inference.
+
+        Args:
+            incoming: Schema dict with optional keys: dtype, shape, is_nested, is_non_tensor.
+
+        Raises:
+            ValueError: If incoming dtype conflicts with existing dtype.
+        """
+        # dtype consistency check
+        new_dtype = incoming.get("dtype")
+        if new_dtype is not None:
+            if self.dtype is None:
+                self.dtype = new_dtype
+            elif self.dtype != new_dtype:
+                raise ValueError(
+                    f"dtype mismatch: existing={self.dtype}, incoming={new_dtype}. "
+                    f"All batches for the same field must have the same dtype."
+                )
+
+        # shape consistency check → is_nested inference
+        new_shape = incoming.get("shape")
+        if new_shape is not None:
+            if self.shape is None and not self.is_nested:
+                self.shape = new_shape
+            elif self.shape is not None and self.shape != new_shape:
+                self.is_nested = True
+                self.shape = None
+
+        # explicit is_nested flag overrides inference
+        if incoming.get("is_nested"):
+            self.is_nested = True
+            self.shape = None
+
+    def remove_samples(self, indexes: list[int]):
+        """Remove sample-level data for the given indexes."""
+        for idx in indexes:
+            self.per_sample_shapes.pop(idx, None)
+
+    def to_batch_schema(self, batch_global_indexes: list[int]) -> dict[str, Any]:
+        """Export as a BatchMeta.field_schema-compatible dict for generate_batch_meta."""
+        schema = {
+            "dtype": self.dtype,
+            "shape": self.shape,
+            "is_nested": self.is_nested,
+            "is_non_tensor": self.is_non_tensor,
+        }
+        if self.is_nested and self.per_sample_shapes:
+            schema["per_sample_shapes"] = [self.per_sample_shapes.get(gi) for gi in batch_global_indexes]
+        return schema
+
+
+@dataclass
 class DataPartitionStatus:
     """
     Robust status information for a data partition with dynamic expansion support.
@@ -225,11 +297,8 @@ class DataPartitionStatus:
 
     # Metadata
     field_name_mapping: dict[str, int] = field(default_factory=dict)  # field_name -> column_index
-    field_dtypes: dict[int, dict[str, Any]] = field(default_factory=dict)  # global_idx -> {field: dtype}
-    field_shapes: dict[int, dict[str, Any]] = field(default_factory=dict)  # global_idx -> {field: shape}
-    # O(F) schema cache: field_name -> {dtype, shape, is_nested, is_non_tensor}
-    # Updated eagerly in _update_field_metadata; used by get_field_schema() for O(1) per-field lookup.
-    field_schema_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # O(F) columnar field metadata: field_name -> FieldMeta
+    field_metadata: dict[str, FieldMeta] = field(default_factory=dict)
     field_custom_backend_meta: dict[int, dict[str, Any]] = field(
         default_factory=dict
     )  # global_idx -> {field: custom_backend_meta}
@@ -379,19 +448,21 @@ class DataPartitionStatus:
         self,
         global_indices: list[int],
         field_names: list[str],
-        dtypes: Optional[dict[int, dict[str, Any]]],
-        shapes: Optional[dict[int, dict[str, Any]]],
+        field_schema: dict[str, dict[str, Any]],
         custom_backend_meta: Optional[dict[int, dict[str, Any]]] = None,
     ) -> bool:
         """
         Update production status for specific samples and fields.
         Handles dynamic expansion of both samples and fields.
 
+        Note: field_names is derived from field_schema.keys() internally.
+        The parameter is kept for backward compatibility but ignored;
+        callers should ensure field_schema contains all intended fields.
+
         Args:
             global_indices: List of sample indices to update
-            field_names: List of field names to mark as produced
-            dtypes: Optional per-sample field dtype information
-            shapes: Optional per-sample field shape information
+            field_names: List of field names (ignored; derived from field_schema.keys())
+            field_schema: Columnar field schema {field_name: {dtype, shape, is_nested, ...}}
             custom_backend_meta: Optional per-sample per-field
                 custom metadata provided by storage backend
 
@@ -399,6 +470,9 @@ class DataPartitionStatus:
             True if update was successful, False on error
         """
         try:
+            # Derive field_names from field_schema to guarantee consistency
+            field_names = list(field_schema.keys())
+
             # Determine required capacity
             max_sample_idx = max(global_indices) if global_indices else -1
             required_samples = max_sample_idx + 1
@@ -408,11 +482,11 @@ class DataPartitionStatus:
                 self.ensure_samples_capacity(required_samples)
 
             # Register new fields if needed
-            new_fields = [field for field in field_names if field not in self.field_name_mapping]
+            new_fields = [f for f in field_names if f not in self.field_name_mapping]
             if new_fields:
                 # Add new fields to mapping
-                for field in new_fields:
-                    self.field_name_mapping[field] = len(self.field_name_mapping)
+                for f in new_fields:
+                    self.field_name_mapping[f] = len(self.field_name_mapping)
 
                 required_fields = len(self.field_name_mapping)
                 with self.data_status_lock:
@@ -421,11 +495,11 @@ class DataPartitionStatus:
             with self.data_status_lock:
                 # Update production status
                 if self.production_status is not None and global_indices and field_names:
-                    field_indices = [self.field_name_mapping.get(field) for field in field_names]
+                    field_indices = [self.field_name_mapping.get(f) for f in field_names]
                     self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = 1
 
             # Update field metadata
-            self._update_field_metadata(global_indices, dtypes, shapes, custom_backend_meta)
+            self._update_field_metadata(global_indices, field_schema, custom_backend_meta)
 
             # Save these global_indexes
             self.global_indexes.update(global_indices)
@@ -438,104 +512,39 @@ class DataPartitionStatus:
 
     def _update_field_metadata(
         self,
-        global_indices: list[int],
-        dtypes: Optional[dict[int, dict[str, Any]]],
-        shapes: Optional[dict[int, dict[str, Any]]],
-        custom_backend_meta: Optional[dict[int, dict[str, Any]]],
+        global_indexes: list[int],
+        field_schema: dict[str, dict[str, Any]],
+        custom_backend_meta: Optional[dict[int, dict[str, Any]]] = None,
     ):
-        """Update field dtype and shape metadata."""
-        if not global_indices:
+        """Update field metadata from columnar field_schema."""
+        if not global_indexes:
             return
 
-        # Validate lengths only for provided mappings
-        if dtypes and len(global_indices) != len(dtypes):
-            raise ValueError(f"`global_indices` {len(global_indices)} and `dtypes` {len(dtypes)} length mismatch.")
-        if shapes and len(global_indices) != len(shapes):
-            raise ValueError(f"`global_indices` {len(global_indices)} and `shapes` {len(shapes)} length mismatch.")
-        if custom_backend_meta and len(global_indices) != len(custom_backend_meta):
-            raise ValueError(
-                f"`global_indices` {len(global_indices)} and `custom_backend_meta` {len(custom_backend_meta)} "
-                f"length mismatch."
-            )
+        for field_name, meta in field_schema.items():
+            if field_name not in self.field_metadata:
+                self.field_metadata[field_name] = FieldMeta(
+                    dtype=meta.get("dtype"),
+                    shape=meta.get("shape"),
+                    is_nested=meta.get("is_nested", False),
+                    is_non_tensor=meta.get("is_non_tensor", False),
+                )
+            else:
+                self.field_metadata[field_name].update(meta)
 
-        # Extract values for each provided mapping; if a mapping is absent, use Nones
-        if dtypes:
-            dtype_value = itemgetter(*global_indices)(dtypes)
-            if not isinstance(dtype_value, tuple):
-                dtype_value = (dtype_value,)
-        else:
-            dtype_value = tuple([None] * len(global_indices))
+            # nested per-sample shapes
+            per_sample_shapes = meta.get("per_sample_shapes")
+            if per_sample_shapes:
+                col_meta = self.field_metadata[field_name]
+                for gi, shape in zip(global_indexes, per_sample_shapes, strict=False):
+                    if shape is not None:
+                        col_meta.per_sample_shapes[gi] = shape
 
-        if shapes:
-            shape_value = itemgetter(*global_indices)(shapes)
-            if not isinstance(shape_value, tuple):
-                shape_value = (shape_value,)
-        else:
-            shape_value = tuple([None] * len(global_indices))
-
+        # custom_backend_meta remains row-oriented storage
         if custom_backend_meta:
-            custom_backend_meta_value = itemgetter(*global_indices)(custom_backend_meta)
-            if not isinstance(custom_backend_meta_value, tuple):
-                custom_backend_meta_value = (custom_backend_meta_value,)
-        else:
-            custom_backend_meta_value = tuple([None] * len(global_indices))
-
-        for i, global_idx in enumerate(global_indices):
-            # Only create and update dtype mapping if a dtype value was provided
-            if dtype_value[i] is not None:
-                if global_idx not in self.field_dtypes:
-                    self.field_dtypes[global_idx] = {}
-                self.field_dtypes[global_idx].update(dtype_value[i])
-                # Update field_schema_cache with new dtype info
-                for field_name, dtype in dtype_value[i].items():
-                    if field_name not in self.field_schema_cache:
-                        self.field_schema_cache[field_name] = {
-                            "dtype": dtype,
-                            "shape": None,
-                            "is_nested": False,
-                            "is_non_tensor": False,
-                        }
-                    else:
-                        cached = self.field_schema_cache[field_name]
-                        if cached.get("dtype") is None and not cached.get("_dtype_mixed"):
-                            cached["dtype"] = dtype
-                        elif cached.get("dtype") is not None and cached["dtype"] != dtype:
-                            logger.warning(
-                                f"Field '{field_name}' dtype changed from "
-                                f"{cached['dtype']} to {dtype} at global_index "
-                                f"{global_idx}. Setting cached dtype to None."
-                            )
-                            cached["dtype"] = None
-                            cached["_dtype_mixed"] = True
-
-            # Only create and update shape mapping if a shape value was provided
-            if shape_value[i] is not None:
-                if global_idx not in self.field_shapes:
-                    self.field_shapes[global_idx] = {}
-                self.field_shapes[global_idx].update(shape_value[i])
-                # Update field_schema_cache with new shape info
-                for field_name, shape in shape_value[i].items():
-                    if field_name not in self.field_schema_cache:
-                        self.field_schema_cache[field_name] = {
-                            "dtype": None,
-                            "shape": shape,
-                            "is_nested": False,
-                            "is_non_tensor": False,
-                        }
-                    else:
-                        cached = self.field_schema_cache[field_name]
-                        if cached.get("shape") is None and not cached.get("is_nested"):
-                            cached["shape"] = shape
-                        elif cached.get("shape") is not None and cached["shape"] != shape:
-                            # Shapes differ across samples → mark as nested
-                            cached["is_nested"] = True
-                            cached["shape"] = None
-
-            # Only create and update custom_backend_meta mapping if a custom_backend_meta value was provided
-            if custom_backend_meta_value[i] is not None:
+            for global_idx, per_field_meta in custom_backend_meta.items():
                 if global_idx not in self.field_custom_backend_meta:
                     self.field_custom_backend_meta[global_idx] = {}
-                self.field_custom_backend_meta[global_idx].update(custom_backend_meta_value[i])
+                self.field_custom_backend_meta[global_idx].update(per_field_meta)
 
     def mark_consumed(self, task_name: str, global_indices: list[int]):
         """
@@ -710,23 +719,12 @@ class DataPartitionStatus:
 
     # ==================== Metadata Methods ====================
 
-    def get_field_schema(self, field_names: list[str]) -> dict[str, dict[str, Any]]:
-        """Return field_schema for the requested fields from the O(F) cache.
-
-        Complexity: O(F) — one dict-lookup per field, no full scan of per-sample maps.
-        The cache is populated eagerly in _update_field_metadata() at put time.
-        """
-        schema = {}
-        for field_name in field_names:
-            cached = self.field_schema_cache.get(field_name)
-            if cached is not None:
-                schema[field_name] = {
-                    "dtype": cached.get("dtype"),
-                    "shape": cached.get("shape"),
-                    "is_nested": cached.get("is_nested", False),
-                    "is_non_tensor": cached.get("is_non_tensor", False),
-                }
-        return schema
+    def get_field_schema(
+        self, field_names: list[str], batch_global_indexes: list[int] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Return field_schema from the FieldMeta store."""
+        gi = batch_global_indexes or []
+        return {f: self.field_metadata[f].to_batch_schema(gi) for f in field_names if f in self.field_metadata}
 
     def get_field_custom_backend_meta(
         self, global_indices: list[int], field_names: list[str]
@@ -755,14 +753,6 @@ class DataPartitionStatus:
             for idx in global_indices
             if idx in self.field_custom_backend_meta
         }
-
-    def get_field_dtype(self, global_index: int, field_name: str) -> Optional[Any]:
-        """Get the dtype for a specific (global_index, field_name) pair."""
-        return self.field_dtypes.get(global_index, {}).get(field_name, None)
-
-    def get_field_shape(self, global_index: int, field_name: str) -> Optional[Any]:
-        """Get the shape for a specific (global_index, field_name) pair."""
-        return self.field_shapes.get(global_index, {}).get(field_name, None)
 
     def get_custom_meta(self, global_indices: list[int]) -> dict[int, dict]:
         """
@@ -888,9 +878,9 @@ class DataPartitionStatus:
                     consumption_tensor[indexes_to_release] = 0
 
             self.global_indexes.difference_update(indexes_to_release)
+            for field_meta in self.field_metadata.values():
+                field_meta.remove_samples(indexes_to_release)
             for idx in indexes_to_release:
-                self.field_dtypes.pop(idx, None)
-                self.field_shapes.pop(idx, None)
                 self.field_custom_backend_meta.pop(idx, None)
                 self.custom_meta.pop(idx, None)
 
@@ -1069,14 +1059,11 @@ class TransferQueueController:
 
     # ==================== Data Production API ====================
 
-    # TODO: Modify dtypes & shapes to be required
     def update_production_status(
         self,
         partition_id: str,
         global_indexes: list[int],
-        field_names: list[str],
-        dtypes: Optional[dict[int, dict[str, Any]]],
-        shapes: Optional[dict[int, dict[str, Any]]],
+        field_schema: dict[str, dict[str, Any]],
         custom_backend_meta: Optional[dict[int, dict[str, Any]]] = None,
     ) -> bool:
         """
@@ -1086,20 +1073,19 @@ class TransferQueueController:
         Args:
             partition_id: ID of the partition
             global_indexes: List of sample indices to update
-            field_names: List of field names to mark as produced
-            dtypes: Optional per-sample field dtype information
-            shapes: Optional per-sample field shape information
+            field_schema: Columnar field schema {field_name: {dtype, shape, is_nested, ...}}
             custom_backend_meta: Optional custom backend metadata
 
         Returns:
             True if update was successful, False otherwise
         """
+        field_names = list(field_schema.keys())
         partition = self._get_partition(partition_id)
         if not partition:
             logger.error(f"Partition {partition_id} not found")
             return False
 
-        success = partition.update_production_status(global_indexes, field_names, dtypes, shapes, custom_backend_meta)
+        success = partition.update_production_status(global_indexes, field_names, field_schema, custom_backend_meta)
         if success:
             logger.debug(
                 f"[{self.controller_id}]: Updated production status for partition {partition_id}: "
@@ -1382,14 +1368,7 @@ class TransferQueueController:
 
         batch_size = len(batch_global_indexes)
 
-        field_schema = partition.get_field_schema(data_fields)
-
-        # For nested fields, populate per_sample_shapes from per-sample field_shapes
-        # so that downstream consumers (e.g. _get_shape_type_custom_backend_meta_list)
-        # can reconstruct tensors with correct per-sample dimensions.
-        for field_name, meta in field_schema.items():
-            if meta.get("is_nested"):
-                meta["per_sample_shapes"] = [partition.get_field_shape(gi, field_name) for gi in batch_global_indexes]
+        field_schema = partition.get_field_schema(data_fields, batch_global_indexes)
 
         # In insert mode, create placeholder schema for unregistered fields so that
         # metadata.field_names is complete and update_production_status() can recognize them.
@@ -2022,9 +2001,7 @@ class TransferQueueController:
                     success = self.update_production_status(
                         partition_id=partition_id,
                         global_indexes=message_data.get("global_indexes", []),
-                        field_names=message_data.get("fields", []),
-                        dtypes=message_data.get("dtypes", {}),
-                        shapes=message_data.get("shapes", {}),
+                        field_schema=message_data.get("field_schema", {}),
                         custom_backend_meta=message_data.get("custom_backend_meta", {}),
                     )
 

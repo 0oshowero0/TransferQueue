@@ -21,9 +21,10 @@ from collections import defaultdict
 from collections.abc import Mapping
 from functools import wraps
 from operator import itemgetter
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 from uuid import uuid4
 
+import numpy as np
 import torch
 import zmq
 from omegaconf import DictConfig
@@ -50,6 +51,13 @@ if not logger.hasHandlers():
     logger.addHandler(handler)
 
 TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT", 200))  # seconds
+
+
+class RoutingGroup(NamedTuple):
+    """Routing result for a single storage unit."""
+
+    global_indexes: list[int]  # global indexes routed to this SU
+    batch_positions: list[int]  # corresponding positions in the original batch
 
 
 @TransferQueueStorageManagerFactory.register("SimpleStorage")
@@ -179,8 +187,8 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         return decorator
 
-    def _group_by_hash(self, global_indexes: list[int]) -> dict[str, list[int]]:
-        """Group samples by global_idx % num_su, return {storage_id: [global_indexes]}.
+    def _group_by_hash(self, global_indexes: list[int]) -> dict[str, RoutingGroup]:
+        """Group samples by global_idx % num_su, return {storage_id: RoutingGroup}.
 
         Routing depends solely on global_idx, independent of batch_size, key ordering,
         or number of calls. The same global_idx always routes to the same SU across
@@ -190,10 +198,40 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         """
         storage_unit_keys = list(self.storage_unit_infos.keys())
         num_units = len(storage_unit_keys)
-        groups: dict[str, list[int]] = defaultdict(list)
-        for global_idx in global_indexes:
-            groups[storage_unit_keys[global_idx % num_units]].append(global_idx)
-        return dict(groups)
+        gi_lists: dict[str, list[int]] = defaultdict(list)
+        pos_lists: dict[str, list[int]] = defaultdict(list)
+        for pos, global_idx in enumerate(global_indexes):
+            key = storage_unit_keys[global_idx % num_units]
+            gi_lists[key].append(global_idx)
+            pos_lists[key].append(pos)
+        return {key: RoutingGroup(gi_lists[key], pos_lists[key]) for key in gi_lists}
+
+    @staticmethod
+    def _select_by_positions(field_data, positions: list[int]):
+        """Slice a single field's data by non-contiguous batch positions.
+
+        Handles four data types:
+        - Nested tensors: unbind → select → return as list
+        - NonTensorStack: tolist → select → re-wrap
+        - list: direct index selection via itemgetter
+        - Regular tensors / numpy arrays: fancy indexing
+        """
+        if isinstance(field_data, torch.Tensor) and field_data.is_nested:
+            unbound = field_data.unbind()
+            getter = itemgetter(*positions) if len(positions) > 1 else lambda seq: (seq[positions[0]],)
+            selected = getter(unbound)
+            return list(selected)
+        elif isinstance(field_data, NonTensorStack):
+            items = field_data.tolist()
+            getter = itemgetter(*positions) if len(positions) > 1 else lambda seq: (seq[positions[0]],)
+            selected = getter(items)
+            return NonTensorStack(*selected)
+        elif isinstance(field_data, list):
+            getter = itemgetter(*positions) if len(positions) > 1 else lambda seq: (seq[positions[0]],)
+            selected = getter(field_data)
+            return list(selected)
+        else:
+            return field_data[positions]
 
     async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
         """
@@ -216,17 +254,14 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         field_schema = self._extract_field_schema(data)
 
-        storage_unit_to_global_indexes = self._group_by_hash(metadata.global_indexes)
-        # Build global_idx -> batch position mapping for non-contiguous slicing
-        gi_to_pos = {gi: pos for pos, gi in enumerate(metadata.global_indexes)}
+        routing = self._group_by_hash(metadata.global_indexes)
         tasks = [
-            self._prepare_and_send_to_unit_by_positions(
-                storage_id=su_id,
-                positions=[gi_to_pos[gi] for gi in gi_list],
-                data=data,
-                metadata=metadata,
+            self._put_to_single_storage_unit(
+                group.global_indexes,
+                {f: self._select_by_positions(data[f], group.batch_positions) for f in data.keys()},
+                target_storage_unit=su_id,
             )
-            for su_id, gi_list in storage_unit_to_global_indexes.items()
+            for su_id, group in routing.items()
         ]
 
         try:
@@ -236,52 +271,17 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                 f"[{self.storage_manager_id}]: put_data failed. "
                 f"partition_id={metadata.partition_ids[0]}, "
                 f"num_samples={metadata.size}, "
-                f"storage_units={list(storage_unit_to_global_indexes.keys())}, "
+                f"storage_units={list(routing.keys())}, "
                 f"error={type(e).__name__}: {e}"
             )
             raise
 
         partition_id = metadata.partition_ids[0]
-        dtypes_for_notify = {
-            global_index: {field_name: field_meta.get("dtype") for field_name, field_meta in field_schema.items()}
-            for global_index in metadata.global_indexes
-        }
-        shapes_for_notify = {
-            global_index: {field_name: field_meta.get("shape") for field_name, field_meta in field_schema.items()}
-            for global_index in metadata.global_indexes
-        }
         await self.notify_data_update(
             partition_id,
-            list(data.keys()),
             metadata.global_indexes,
-            dtypes_for_notify,
-            shapes_for_notify,
+            field_schema,
         )
-
-    async def _prepare_and_send_to_unit_by_positions(
-        self,
-        storage_id,
-        positions,
-        data,
-        metadata,
-    ) -> None:
-        """Slice data by non-contiguous positions and send to the specified SU."""
-        global_indexes = [metadata.global_indexes[pos] for pos in positions]
-        storage_data = {}
-        for field_name in data.keys():
-            field_data = data[field_name]
-            if isinstance(field_data, torch.Tensor) and field_data.is_nested:
-                unbound = field_data.unbind()
-                storage_data[field_name] = [unbound[pos] for pos in positions]
-            elif isinstance(field_data, NonTensorStack):
-                items = field_data.tolist()
-                storage_data[field_name] = NonTensorStack(*[items[pos] for pos in positions])
-            elif isinstance(field_data, list):
-                storage_data[field_name] = [field_data[pos] for pos in positions]
-            else:
-                # torch.Tensor (non-nested) and numpy arrays support fancy indexing
-                storage_data[field_name] = field_data[positions]
-        await self._put_to_single_storage_unit(global_indexes, storage_data, target_storage_unit=storage_id)
 
     @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
     async def _put_to_single_storage_unit(
@@ -330,6 +330,28 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             )
             raise RuntimeError(f"Error in put to storage unit {target_storage_unit}: {type(e).__name__}: {e}") from e
 
+    @staticmethod
+    def _pack_field_values(values: list) -> torch.Tensor | NonTensorStack:
+        """Pack a list of per-sample values into a batched container.
+
+        A memory copy is intentional here: it detaches received tensors from
+        zero-copy buffers, gives them their own lifetime, and ensures writability.
+        """
+        if not values:
+            raise ValueError("_pack_field_values received empty values list; caller should filter empty batches")
+        if any(v is None for v in values):
+            raise ValueError("_pack_field_values received None in values list; some batch positions were not filled")
+        if all(isinstance(v, torch.Tensor) for v in values):
+            if all(v.shape == values[0].shape for v in values):
+                return torch.stack(values)
+            return torch.nested.as_nested_tensor(values, layout=torch.jagged)
+        if all(isinstance(v, np.ndarray) for v in values):
+            # Detach numpy arrays from ZMQ frame memory (copy=False path).
+            # Use per-element .copy() instead of np.stack because string-dtype
+            # arrays may have heterogeneous shapes.
+            return NonTensorStack(*[v.copy() for v in values])
+        return NonTensorStack(*values)
+
     async def get_data(self, metadata: BatchMeta) -> TensorDict:
         """
         Retrieve data from remote StorageUnit based on metadata.
@@ -348,11 +370,11 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         if metadata.size == 0:
             return TensorDict({}, batch_size=0)
 
-        storage_unit_groups = self._group_by_hash(metadata.global_indexes)
+        routing = self._group_by_hash(metadata.global_indexes)
 
         tasks = [
-            self._get_from_single_storage_unit(global_indexes, metadata.field_names, target_storage_unit=su_id)
-            for su_id, global_indexes in storage_unit_groups.items()
+            self._get_from_single_storage_unit(group.global_indexes, metadata.field_names, target_storage_unit=su_id)
+            for su_id, group in routing.items()
         ]
         try:
             results = await asyncio.gather(*tasks)
@@ -361,47 +383,21 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                 f"[{self.storage_manager_id}]: get_data failed. "
                 f"partition_id={metadata.partition_ids[0]}, "
                 f"num_samples={metadata.size}, "
-                f"storage_units={list(storage_unit_groups.keys())}, "
+                f"storage_units={list(routing.keys())}, "
                 f"error={type(e).__name__}: {e}"
             )
             raise
 
-        merged_data: dict[int, dict[str, torch.Tensor]] = {}
-        for global_indexes, fields, data_from_single_storage_unit, messages in results:
-            field_getter = itemgetter(*fields)
-            field_values = field_getter(data_from_single_storage_unit)
+        # Scatter results directly to batch positions — no intermediate per-sample dict
+        n = len(metadata.global_indexes)
+        ordered_data: dict[str, list] = {field: [None] * n for field in metadata.field_names}
 
-            if len(fields) == 1:
-                extracted_data = {fields[0]: field_values}
-            else:
-                extracted_data = dict(zip(fields, field_values, strict=False))
+        for (su_id, group), (_, fields, su_data, _) in zip(routing.items(), results, strict=True):
+            for field in fields:
+                for i, pos in enumerate(group.batch_positions):
+                    ordered_data[field][pos] = su_data[field][i]
 
-            for idx, global_idx in enumerate(global_indexes):
-                if global_idx not in merged_data:
-                    merged_data[global_idx] = {}
-                merged_data[global_idx].update({field: extracted_data[field][idx] for field in fields})
-
-        ordered_data: dict[str, list[torch.Tensor]] = {}
-        for field in metadata.field_names:
-            ordered_data[field] = [merged_data[global_idx][field] for global_idx in metadata.global_indexes]
-
-        # In the final packing stage we intentionally perform a memory copy through torch.stack and as_nested_tensor.
-        # This detaches the received tensors from the original zero-copy buffers,
-        # gives them their own lifetime, and ensures the resulting tensors are writable.
-        tensor_data = {
-            field: (
-                torch.stack(v)
-                if v
-                and all(isinstance(item, torch.Tensor) for item in v)
-                and all(item.shape == v[0].shape for item in v)
-                else (
-                    torch.nested.as_nested_tensor(v, layout=torch.jagged)
-                    if v and all(isinstance(item, torch.Tensor) for item in v)
-                    else NonTensorStack(*v)
-                )
-            )
-            for field, v in ordered_data.items()
-        }
+        tensor_data = {field: self._pack_field_values(v) for field, v in ordered_data.items()}
 
         return TensorDict(tensor_data, batch_size=len(metadata))
 
@@ -422,7 +418,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         )
         try:
             await socket.send_multipart(request_msg.serialize())
-            messages = await socket.recv_multipart()
+            messages = await socket.recv_multipart(copy=False)
             response_msg = ZMQMessage.deserialize(messages)
 
             if response_msg.request_type == ZMQRequestType.GET_DATA_RESPONSE:
@@ -464,11 +460,11 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         if metadata.size == 0:
             return
 
-        storage_unit_groups = self._group_by_hash(metadata.global_indexes)
+        routing = self._group_by_hash(metadata.global_indexes)
 
         tasks = [
-            self._clear_single_storage_unit(global_indexes, target_storage_unit=su_id)
-            for su_id, global_indexes in storage_unit_groups.items()
+            self._clear_single_storage_unit(group.global_indexes, target_storage_unit=su_id)
+            for su_id, group in routing.items()
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)

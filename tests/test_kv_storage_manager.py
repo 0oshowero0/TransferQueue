@@ -318,7 +318,7 @@ def test_put_data_with_custom_backend_meta_from_storage_client(mock_notify, test
     # Verify notify_data_update was called with correct custom_backend_meta structure
     mock_notify.assert_called_once()
     notify_call_args = mock_notify.call_args
-    per_field_custom_backend_meta = notify_call_args[0][5]  # 6th positional argument
+    per_field_custom_backend_meta = notify_call_args[0][3]  # 4th positional argument (custom_backend_meta)
 
     # Verify custom_backend_meta is structured correctly: {global_index: {field: meta}}
     assert 0 in per_field_custom_backend_meta
@@ -358,7 +358,7 @@ def test_put_data_without_custom_backend_meta(mock_notify, test_data_for_put_dat
     # Verify notify_data_update was called with empty dict for custom_backend_meta
     mock_notify.assert_called_once()
     notify_call_args = mock_notify.call_args
-    per_field_custom_backend_meta = notify_call_args[0][5]  # 6th positional argument
+    per_field_custom_backend_meta = notify_call_args[0][3]  # 4th positional argument (custom_backend_meta)
     assert per_field_custom_backend_meta == {}
 
 
