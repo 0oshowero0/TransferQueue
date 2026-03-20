@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 import os
 import sys
 import textwrap
@@ -65,20 +66,11 @@ def demonstrate_data_workflow():
     print("[Step 1] Putting data into TransferQueue...")
     tq_client = tq.get_client()
 
-    input_ids = torch.tensor(
-        [
-            [1, 2, 3],
-            [4, 5, 6],
-            [7, 8, 9],
-            [10, 11, 12],
-        ]
-    )
-    attention_mask = torch.ones_like(input_ids)
+    input_ids = torch.randn(4096, 128000)  # 2GB数据
 
     data_batch = TensorDict(
         {
             "input_ids": input_ids,
-            "attention_mask": attention_mask,
         },
         batch_size=input_ids.size(0),
     )
@@ -91,8 +83,8 @@ def demonstrate_data_workflow():
     # Step 2: Get metadata
     print("[Step 2] Requesting data metadata...")
     batch_meta = tq_client.get_meta(
-        data_fields=["input_ids", "attention_mask"],
-        batch_size=data_batch.batch_size[0],
+        data_fields=["input_ids"],
+        batch_size=4096,
         partition_id=partition_id,
         task_name="tutorial_task",
     )
@@ -105,17 +97,15 @@ def demonstrate_data_workflow():
     print("  ✓ Data retrieved successfully")
     print(f"    Keys: {list(retrieved_data.keys())}")
 
-    # Step 4: Verify
-    print("[Step 4] Verifying data integrity...")
-    assert torch.equal(retrieved_data["input_ids"], input_ids)
-    assert torch.equal(retrieved_data["attention_mask"], attention_mask)
-    print("  ✓ Data matches original!")
 
     # Step 5: Clear
+    print("清空数据之前")
+    time.sleep(10)
     print("[Step 5] Clearing partition... (you may also use clear_samples() to clear specific samples)")
     tq_client.clear_partition(partition_id=partition_id)
     print("  ✓ Partition cleared")
-
+    print("数据已清空，可以主动control c了")
+    time.sleep(1000)
 
 def demonstrate_storage_backend_options():
     """
@@ -176,7 +166,7 @@ def main():
         print("Demonstrating the user workflow...")
         demonstrate_data_workflow()
 
-        demonstrate_storage_backend_options()
+        #demonstrate_storage_backend_options()
 
         print("=" * 80)
         print("Tutorial Complete!")
