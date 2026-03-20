@@ -355,6 +355,23 @@ class SimpleStorageUnit:
                 body={},
             )
 
+            import os
+            import subprocess
+
+            pid = os.getpid()
+            print(f"SimpleStorageUnit{pid=}中的put进程结束，请看内存占用")
+            output_file = os.path.expanduser(f"~/vmmap_storage_unit_{pid=}_after_put.txt")
+            with open(output_file, "w", encoding="utf-8") as f:
+                # 命令拆分为列表（避免Shell解析，更安全）
+                result = subprocess.run(
+                    ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                    check=True,
+                    stdout=f,  # 将标准输出重定向到文件
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+
             return response_msg
         except Exception as e:
             return ZMQMessage.create(
@@ -405,6 +422,23 @@ class SimpleStorageUnit:
                     f"detail error message: {str(e)}"
                 },
             )
+
+        import os
+        import subprocess
+
+        pid = os.getpid()
+        print(f"SimpleStorageUnit{pid=}中的get进程结束，请看内存占用")
+        output_file = os.path.expanduser(f"~/vmmap_storage_unit_{pid=}_after_get.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
         return response_msg
 
     def _handle_clear(self, data_parts: ZMQMessage) -> ZMQMessage:
@@ -418,6 +452,24 @@ class SimpleStorageUnit:
             Clear data success response ZMQMessage.
         """
         try:
+
+            import os
+            import subprocess
+
+            pid = os.getpid()
+            print(f"{self.storage_unit_id}: 进程号是 {os.getpid()}，准备开始clear")
+            output_file = os.path.expanduser(f"~/vmmap_storage_unit_{pid=}_before_clear_data.txt")
+            with open(output_file, "w", encoding="utf-8") as f:
+                # 命令拆分为列表（避免Shell解析，更安全）
+                result = subprocess.run(
+                    ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                    check=True,
+                    stdout=f,  # 将标准输出重定向到文件
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+
             global_indexes = data_parts.body["global_indexes"]
 
             with limit_pytorch_auto_parallel_threads(
@@ -439,6 +491,23 @@ class SimpleStorageUnit:
                     f"detail error message: {str(e)}"
                 },
             )
+
+        import os
+        import subprocess
+
+        pid = os.getpid()
+        print(f"{self.storage_unit_id}: 进程号是 {os.getpid()}，clear完成")
+        output_file = os.path.expanduser(f"~/vmmap_storage_unit_{pid=}_after_clear_data.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
         return response_msg
 
     @staticmethod

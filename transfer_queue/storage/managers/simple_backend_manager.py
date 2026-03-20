@@ -251,16 +251,56 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         if batch_size == 0:
             return
 
+        import os
+        import subprocess
+
+        pid = os.getpid()
+        print(f"主控{pid=}中的put进程开始，请看主控进程的内存占用")
+        output_file = os.path.expanduser("~/vmmap_main_before_put.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        await asyncio.sleep(5)
+
         field_schema = extract_field_schema(data)
 
         routing = self._group_by_hash(metadata.global_indexes)
+
+        a = []
+        b = []
+        c = []
+        for su_id, group in routing.items():
+            a.append(group.global_indexes)
+            b.append({f: self._select_by_positions(data[f], group.batch_positions) for f in data.keys()})
+            c.append(su_id)
+
+        pid = os.getpid()
+        print(f"主控{pid=}中的put进程完成所有的filter_storage_data，请看主控进程的内存占用")
+        output_file = os.path.expanduser("~/vmmap_main_before_put_after_filter_storage_data.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
         tasks = [
             self._put_to_single_storage_unit(
-                group.global_indexes,
-                {f: self._select_by_positions(data[f], group.batch_positions) for f in data.keys()},
-                target_storage_unit=su_id,
+                a[i],
+                b[i],
+                target_storage_unit=c[i],
             )
-            for su_id, group in routing.items()
+            for i in range(len(a))
         ]
 
         try:
@@ -274,6 +314,22 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                 f"error={type(e).__name__}: {e}"
             )
             raise
+
+        import time
+
+        time.sleep(5)
+
+        print(f"主控{pid=}中的put进程结束，请看主控进程的内存占用")
+        output_file = os.path.expanduser("~/vmmap_main_after_put.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
 
         partition_id = metadata.partition_ids[0]
         await self.notify_data_update(
@@ -365,11 +421,37 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         if metadata.size == 0:
             return TensorDict({}, batch_size=0)
 
+        import os
+        import subprocess
+
+        pid = os.getpid()
+        print(f"主控{pid=}中的get进程开始，请看主控进程的内存占用")
+        output_file = os.path.expanduser("~/vmmap_main_before_get.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        await asyncio.sleep(5)
+
         routing = self._group_by_hash(metadata.global_indexes)
 
+        a = []
+        b = []
+        c = []
+        for su_id, group in routing.items():
+            a.append(group.global_indexes)
+            b.append(metadata.field_names)
+            c.append(su_id)
+
         tasks = [
-            self._get_from_single_storage_unit(group.global_indexes, metadata.field_names, target_storage_unit=su_id)
-            for su_id, group in routing.items()
+            self._get_from_single_storage_unit(a[i], b[i], target_storage_unit=c[i]) for i in range(len(a))
+
         ]
         try:
             results = await asyncio.gather(*tasks)
@@ -383,6 +465,24 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             )
             raise
 
+        import time
+
+        time.sleep(5)
+
+        print(f"主控{pid=}中的get进程收到数据，请看主控进程的内存占用")
+        output_file = os.path.expanduser("~/vmmap_main_after_get.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        await asyncio.sleep(5)
+
         # Scatter results directly to batch positions — no intermediate per-sample dict
         n = len(metadata.global_indexes)
         ordered_data: dict[str, list] = {field: [None] * n for field in metadata.field_names}
@@ -393,8 +493,24 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                     ordered_data[field][pos] = su_data[field][i]
 
         tensor_data = {field: self._pack_field_values(v) for field, v in ordered_data.items()}
+        rt = TensorDict(tensor_data, batch_size=len(metadata))
 
-        return TensorDict(tensor_data, batch_size=len(metadata))
+        time.sleep(5)
+
+        print(f"主控{pid=}中的get进程结束,完成打包准备返回，请看主控进程的内存占用")
+        output_file = os.path.expanduser("~/vmmap_main_after_get_before_return.txt")
+        with open(output_file, "w", encoding="utf-8") as f:
+            # 命令拆分为列表（避免Shell解析，更安全）
+            result = subprocess.run(
+                ["vmmap", f"{pid}"],  # 命令+参数拆分为列表，无Shell解析
+                check=True,
+                stdout=f,  # 将标准输出重定向到文件
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+
+        return rt
 
     @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
     async def _get_from_single_storage_unit(
