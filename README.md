@@ -58,7 +58,7 @@ We also track the consumption history for each computational task (e.g., `genera
 
 To make the data retrieval process more customizable, we provide a `Sampler` class that allows users to define their own data retrieval and consumption logic. Refer to the [Customize](#customize) section for details.
 
-> In the future, we plan to support **load-balancing** and **dynamic batching** capabilities in the control plane. Additionally, we will support data management for disaggregated frameworks where each rank manages data retrieval autonomously, rather than being coordinated by a single controller.
+> **load-balancing** capabilities are experimentally supported in the control plane. This design enables us to offload some data management capabilities from single controller. Refer to [#PR70](https://github.com/Ascend/TransferQueue/pull/70) for details.
 
 ### Data Plane: Distributed Data Storage
 
@@ -70,7 +70,7 @@ Specifically, we provide a `TransferQueueStorageManager` abstraction class that 
 - `async def get_data(self, metadata: BatchMeta) -> TensorDict`
 - `async def clear_data(self, metadata: BatchMeta) -> None`
 
-This class encapsulates the core interaction logic within the TransferQueue system. You only need to write a simple subclass to integrate your custom storage backend. Refer to the[Customize](#customize) section for details.
+This class encapsulates the core interaction logic within the TransferQueue system. You only need to write a simple subclass to integrate your custom storage backend. Refer to the [Customize](#customize) section for details.
 
 Currently, we support the following storage backends:
 
