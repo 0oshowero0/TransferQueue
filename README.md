@@ -208,6 +208,7 @@ pip install TransferQueue
    ```
 
 <h2 id="performance">📊 Performance</h2>
+
 ### Simple Case: Regular Tensor Only
 <p align="center">
   <img src="https://github.com/TransferQueue/community_doc/blob/main/docs/performance_simple_0.1.6.png?raw=true" width="100%">
