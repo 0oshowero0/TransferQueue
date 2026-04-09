@@ -23,13 +23,15 @@ from torch import Tensor
 
 from transfer_queue.storage.clients.base import TransferQueueStorageKVClient
 from transfer_queue.storage.clients.factory import StorageClientFactory
+from transfer_queue.utils.tensor_utils import allocate_empty_tensors, get_nbytes, merge_continues_memory
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
 MOONCAKE_STORE_IMPORTED: bool = True
 try:
-    from mooncake.store import MooncakeDistributedStore
+    from mooncake.store import MooncakeDistributedStore, ReplicateConfig
+
 except ImportError:
     MOONCAKE_STORE_IMPORTED = False
 
@@ -78,10 +80,9 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
         if not self.metadata_server.startswith("etcd://") and not self.metadata_server.endswith("/metadata"):
             self.metadata_server = self.metadata_server + "/metadata"
 
-        if self.metadata_server is None:
-            raise ValueError("Missing 'metadata_server' in config")
-        if self.master_server_address is None:
-            raise ValueError("Missing 'master_server_address' in config")
+        self.replica_config = ReplicateConfig()
+        # FIXME: hard_pin is not supported yet
+        # self.replica_config.with_hard_pin = True
 
         self._store = MooncakeDistributedStore()
         ret = self._store.setup(
@@ -116,12 +117,8 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
 
         for key, value in zip(keys, values, strict=True):
             if isinstance(value, torch.Tensor):
-                tensor = value.contiguous()
-                # TODO: use gpu direct rdma instead
-                if tensor.device.type == "cuda":
-                    tensor = tensor.cpu()
                 tensor_keys.append(key)
-                tensor_values.append(tensor)
+                tensor_values.append(value)
             else:
                 non_tensor_keys.append(key)
                 non_tensor_values.append(pickle.dumps(value))
@@ -139,7 +136,11 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             batch_keys = keys[i : i + BATCH_SIZE_LIMIT]
             batch_tensors = tensors[i : i + BATCH_SIZE_LIMIT]
 
-            results = self._store.batch_put_tensor(batch_keys, batch_tensors)
+            batch_ptrs, batch_sizes = self._preprocess_tensors_for_put(batch_tensors)
+            batch_ptr_reduced, batch_sizes_reduced = merge_continues_memory(batch_ptrs, batch_sizes)
+            self._register_all_buffers(batch_ptr_reduced, batch_sizes_reduced)
+
+            results = self._store.batch_upsert_from(batch_keys, batch_ptrs, batch_sizes, config=self.replica_config)
             if not all(r == 0 for r in results):
                 failed_indices = [j for j, r in enumerate(results) if r != 0]
                 error_codes = [results[j] for j in failed_indices]
@@ -147,30 +148,38 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
                     f"batch_put_tensor failed for indices {failed_indices} with error codes: {error_codes}"
                 )
 
+            self._unregister_all_buffers(batch_ptr_reduced)
+
     def _batch_put_bytes(self, keys: list[str], values: list[bytes]):
         for i in range(0, len(keys), BATCH_SIZE_LIMIT):
             batch_keys = keys[i : i + BATCH_SIZE_LIMIT]
             batch_values = values[i : i + BATCH_SIZE_LIMIT]
 
-            ret = self._store.put_batch(batch_keys, batch_values)
+            ret = self._store.upsert_batch(batch_keys, batch_values, self.replica_config)
             if ret != 0:
                 raise RuntimeError(f"put_batch failed with error code: {ret}")
 
-    def get(self, keys: list[str], shapes=None, dtypes=None, custom_backend_meta=None) -> list[Any]:
+    def get(
+        self,
+        keys: list[str],
+        shapes: Optional[list[Any]] = None,
+        dtypes: Optional[list[Any]] = None,
+        custom_backend_meta: Optional[list[str]] = None,
+    ) -> list[Any]:
         """Get multiple key-value pairs from MooncakeStore.
 
         Args:
-            keys (List[str]): Keys to fetch.
-            shapes (List[List[int]]): Expected tensor shapes (use [] for scalars).
-            dtypes (List[Optional[torch.dtype]]): Expected dtypes; use None for non-tensor data.
-            custom_backend_meta (List[str], optional): ...
+            keys: Keys to fetch.
+            shapes: Expected tensor shapes (use [] for scalars).
+            dtypes: Expected dtypes; use None for non-tensor data.
+            custom_backend_meta: Optional custom backend metadata.
 
         Returns:
-            List[Any]: Retrieved values in the same order as input keys.
+            Retrieved values in the same order as input keys.
         """
 
         if shapes is None or dtypes is None:
-            raise ValueError("MooncakeStoreClient needs shapes and dtypes")
+            raise ValueError("MooncakeStoreClient needs shapes and dtypes for zero-copy transfer.")
         if not (len(keys) == len(shapes) == len(dtypes)):
             raise ValueError("Lengths of keys, shapes, dtypes must match")
 
@@ -210,14 +219,25 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             batch_shapes = shapes[i : i + BATCH_SIZE_LIMIT]
             batch_dtypes = dtypes[i : i + BATCH_SIZE_LIMIT]
 
-            batch_results = self._store.batch_get_tensor(batch_keys)
+            batch_nbytes = get_nbytes(batch_dtypes, batch_shapes)
+            batch_buffer_tensors, batch_buffer_ptrs = allocate_empty_tensors(batch_dtypes, batch_shapes)
 
-            if len(batch_results) != len(batch_keys):
-                raise RuntimeError(f"batch_get_tensor returned {len(batch_results)} items, expected {len(batch_keys)}")
+            batch_ptrs = batch_buffer_ptrs
 
-            for j, (tensor, shape, dtype) in enumerate(zip(batch_results, batch_shapes, batch_dtypes, strict=True)):
-                if tensor is None:
-                    raise RuntimeError(f"batch_get_tensor returned None for key '{batch_keys[j]}'")
+            self._register_all_buffers(batch_ptrs, batch_nbytes)
+            ret_codes = self._store.batch_get_into(batch_keys, batch_ptrs, batch_nbytes)
+            self._unregister_all_buffers(batch_ptrs)
+
+            if len(ret_codes) != len(batch_keys):
+                raise RuntimeError(f"batch_get_into returned {len(ret_codes)} results, expected {len(batch_keys)}")
+
+            # Check result codes and validate tensors
+            # Note: Positive values indicate success (bytes read), negative values indicate error
+            for j, (tensor, shape, dtype, ret_code) in enumerate(
+                zip(batch_buffer_tensors, batch_shapes, batch_dtypes, ret_codes, strict=True)
+            ):
+                if ret_code < 0:
+                    raise RuntimeError(f"batch_get_into failed for key '{batch_keys[j]}' with error code: {ret_code}")
                 if tensor.shape != torch.Size(shape):
                     raise RuntimeError(
                         f"Shape mismatch for key '{batch_keys[j]}': expected {shape}, got {tensor.shape}"
@@ -243,26 +263,35 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
     def clear(self, keys: list[str], custom_backend_meta=None):
         """Deletes multiple keys from MooncakeStore.
 
-
         Args:
             keys (List[str]): List of keys to remove.
             custom_backend_meta (List[Any], optional): ...
         """
-        global_indexes_patterns = {key.split("@")[0] + "@.*" for key in keys}
-        for p in global_indexes_patterns:
-            ret = self._store.remove_by_regex(p, force=True)
-            if ret < 0:
-                logger.warning(f"remove failed for key '{p}' with error code: {ret}")
-
-        # FIXME: controller returned BatchMeta may have mismatched fields in some case, preventing
-        #        key-value based backends to accurately clear all existing keys..
-        # for key in keys:
-        #     ret = self._store.remove(key)
-        #     if not (ret == 0 or ret == -704):
-        #         logger.warning(f"remove failed for key '{key}' with error code: {ret}")
+        rets = self._store.batch_remove(keys, force=True)
+        for i, ret in enumerate(rets):
+            if not (ret == 0 or ret == -704):
+                logger.error(f"remove failed for key '{keys[i]}' with error code: {ret}")
 
     def close(self):
         """Closes MooncakeStore."""
         if self._store:
             self._store.close()
             self._store = None
+
+    @staticmethod
+    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[Any], list[Any]]:
+        ptr_list = []
+        size_list = []
+        for t in values:
+            t = t.contiguous()
+            ptr_list.append(t.data_ptr())
+            size_list.append(t.nbytes)
+        return ptr_list, size_list
+
+    def _register_all_buffers(self, ptrs, sizes):
+        for ptr, size in zip(ptrs, sizes, strict=False):
+            self._store.register_buffer(ptr, size)
+
+    def _unregister_all_buffers(self, ptrs):
+        for ptr in ptrs:
+            self._store.unregister_buffer(ptr)
