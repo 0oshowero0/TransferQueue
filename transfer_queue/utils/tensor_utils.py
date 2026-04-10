@@ -110,6 +110,7 @@ def compute_stride(shape: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def get_nbytes(dtypes, shapes) -> list[int]:
+    """Calculate number of bytes according to tensor dtypes and shapes."""
     assert len(dtypes) == len(shapes)
     nbytes = []
     for i in range(len(dtypes)):
