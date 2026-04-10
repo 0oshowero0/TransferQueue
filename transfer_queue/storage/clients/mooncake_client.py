@@ -16,6 +16,7 @@
 import logging
 import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import torch
@@ -35,7 +36,8 @@ try:
 except ImportError:
     MOONCAKE_STORE_IMPORTED = False
 
-BATCH_SIZE_LIMIT: int = 500
+BATCH_SIZE_LIMIT: int = 200
+MAX_WORKER_THREADS = 4
 
 
 @StorageClientFactory.register("MooncakeStoreClient")
@@ -81,7 +83,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             self.metadata_server = self.metadata_server + "/metadata"
 
         self.replica_config = ReplicateConfig()
-        # FIXME: hard_pin is not supported yet
+        # FIXME: hard_pin support
         # self.replica_config.with_hard_pin = True
 
         self._store = MooncakeDistributedStore()
@@ -97,7 +99,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
         if ret != 0:
             raise RuntimeError(f"Mooncake store setup failed with error code: {ret}")
 
-    def put(self, keys: list[str], values: list[Any]) -> Optional[list[Any]]:
+    def put(self, keys: list[str], values: list[Any]) -> None:
         """Stores multiple key-value pairs to MooncakeStore.
 
         Args:
@@ -121,25 +123,33 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
                 tensor_values.append(value)
             else:
                 non_tensor_keys.append(key)
-                non_tensor_values.append(pickle.dumps(value))
+                non_tensor_values.append(value)
 
-        if tensor_keys:
-            self._batch_put_tensors(tensor_keys, tensor_values)
+        futures = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS) as executor:
+            for i in range(0, len(tensor_keys), BATCH_SIZE_LIMIT):
+                batch_keys = tensor_keys[i : i + BATCH_SIZE_LIMIT]
+                batch_tensors = tensor_values[i : i + BATCH_SIZE_LIMIT]
+                futures.append(executor.submit(self._put_tensors_thread_worker, batch_keys, batch_tensors))
 
-        if non_tensor_keys:
-            self._batch_put_bytes(non_tensor_keys, non_tensor_values)
+            for i in range(0, len(non_tensor_keys), BATCH_SIZE_LIMIT):
+                batch_keys = non_tensor_keys[i : i + BATCH_SIZE_LIMIT]
+                batch_values = non_tensor_values[i : i + BATCH_SIZE_LIMIT]
+                futures.append(executor.submit(self._put_bytes_thread_worker, batch_keys, batch_values))
+
+            for future in as_completed(futures):
+                future.result()
 
         return None
 
-    def _batch_put_tensors(self, keys: list[str], tensors: list[Tensor]):
-        for i in range(0, len(keys), BATCH_SIZE_LIMIT):
-            batch_keys = keys[i : i + BATCH_SIZE_LIMIT]
-            batch_tensors = tensors[i : i + BATCH_SIZE_LIMIT]
+    def _put_tensors_thread_worker(self, batch_keys: list[str], batch_tensors: list[Tensor]):
+        """Worker thread for putting batch of tensors to MooncakeStore."""
 
-            batch_ptrs, batch_sizes = self._preprocess_tensors_for_put(batch_tensors)
-            batch_ptr_reduced, batch_sizes_reduced = merge_continues_memory(batch_ptrs, batch_sizes)
-            self._register_all_buffers(batch_ptr_reduced, batch_sizes_reduced)
+        batch_ptrs, batch_sizes, contiguous_tensors = self._preprocess_tensors_for_put(batch_tensors)
+        batch_ptr_reduced, batch_sizes_reduced = merge_continues_memory(batch_ptrs, batch_sizes)
+        self._register_all_buffers(batch_ptr_reduced, batch_sizes_reduced)
 
+        try:
             results = self._store.batch_upsert_from(batch_keys, batch_ptrs, batch_sizes, config=self.replica_config)
             if not all(r == 0 for r in results):
                 failed_indices = [j for j, r in enumerate(results) if r != 0]
@@ -147,17 +157,17 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
                 raise RuntimeError(
                     f"batch_put_tensor failed for indices {failed_indices} with error codes: {error_codes}"
                 )
-
+        finally:
             self._unregister_all_buffers(batch_ptr_reduced)
 
-    def _batch_put_bytes(self, keys: list[str], values: list[bytes]):
-        for i in range(0, len(keys), BATCH_SIZE_LIMIT):
-            batch_keys = keys[i : i + BATCH_SIZE_LIMIT]
-            batch_values = values[i : i + BATCH_SIZE_LIMIT]
+    def _put_bytes_thread_worker(self, batch_keys: list[str], batch_values: list[bytes]):
+        """Worker thread for putting batch of non-tensors to MooncakeStore."""
 
-            ret = self._store.upsert_batch(batch_keys, batch_values, self.replica_config)
-            if ret != 0:
-                raise RuntimeError(f"put_batch failed with error code: {ret}")
+        batch_values = [pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL) for v in batch_values]
+
+        ret = self._store.upsert_batch(batch_keys, batch_values, self.replica_config)
+        if ret != 0:
+            raise RuntimeError(f"put_batch failed with error code: {ret}")
 
     def get(
         self,
@@ -194,71 +204,61 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
 
         results = [None] * len(keys)
 
-        if tensor_indices:
-            tensor_keys = [keys[i] for i in tensor_indices]
-            tensor_shapes = [shapes[i] for i in tensor_indices]
-            tensor_dtypes = [dtypes[i] for i in tensor_indices]
-            tensor_results = self._batch_get_tensors(tensor_keys, tensor_shapes, tensor_dtypes)
-            # TODO: optimize these for loops
-            for idx, tensor in zip(tensor_indices, tensor_results, strict=True):
-                results[idx] = tensor
+        futures = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS) as executor:
+            for i in range(0, len(tensor_indices), BATCH_SIZE_LIMIT):
+                batch_indexes = tensor_indices[i : i + BATCH_SIZE_LIMIT]
+                batch_keys = [keys[i] for i in batch_indexes]
+                batch_shapes = [shapes[i] for i in batch_indexes]
+                batch_dtypes = [dtypes[i] for i in batch_indexes]
+                futures.append(
+                    executor.submit(
+                        self._get_tensors_thread_worker, batch_keys, batch_shapes, batch_dtypes, batch_indexes
+                    )
+                )
 
-        if non_tensor_indices:
-            non_tensor_keys = [keys[i] for i in non_tensor_indices]
-            non_tensor_results = self._batch_get_bytes(non_tensor_keys)
-            for idx, data in zip(non_tensor_indices, non_tensor_results, strict=True):
-                results[idx] = pickle.loads(data)
+            for i in range(0, len(non_tensor_indices), BATCH_SIZE_LIMIT):
+                batch_indexes = non_tensor_indices[i : i + BATCH_SIZE_LIMIT]
+                batch_keys = [keys[i] for i in batch_indexes]
+                futures.append(executor.submit(self._get_bytes_thread_worker, batch_keys, batch_indexes))
+
+            for future in as_completed(futures):
+                retrieved_values, batch_indexes = future.result()
+                for idx, val in zip(batch_indexes, retrieved_values, strict=True):
+                    results[idx] = val
 
         return results
 
-    def _batch_get_tensors(self, keys: list[str], shapes: list, dtypes: list) -> list[Tensor]:
-        tensors = [None] * len(keys)
+    def _get_tensors_thread_worker(
+        self, batch_keys: list[str], batch_shapes: list[tuple], batch_dtypes: list[torch.dtype], indexes: list[int]
+    ) -> tuple[list[Tensor], list[int]]:
+        batch_nbytes = get_nbytes(batch_dtypes, batch_shapes)
+        batch_buffer_tensors, batch_buffer_ptrs = allocate_empty_tensors(batch_dtypes, batch_shapes)
 
-        for i in range(0, len(keys), BATCH_SIZE_LIMIT):
-            batch_keys = keys[i : i + BATCH_SIZE_LIMIT]
-            batch_shapes = shapes[i : i + BATCH_SIZE_LIMIT]
-            batch_dtypes = dtypes[i : i + BATCH_SIZE_LIMIT]
-
-            batch_nbytes = get_nbytes(batch_dtypes, batch_shapes)
-            batch_buffer_tensors, batch_buffer_ptrs = allocate_empty_tensors(batch_dtypes, batch_shapes)
-
-            batch_ptrs = batch_buffer_ptrs
-
-            self._register_all_buffers(batch_ptrs, batch_nbytes)
-            ret_codes = self._store.batch_get_into(batch_keys, batch_ptrs, batch_nbytes)
-            self._unregister_all_buffers(batch_ptrs)
-
+        self._register_all_buffers(batch_buffer_ptrs, batch_nbytes)
+        try:
+            ret_codes = self._store.batch_get_into(batch_keys, batch_buffer_ptrs, batch_nbytes)
             if len(ret_codes) != len(batch_keys):
                 raise RuntimeError(f"batch_get_into returned {len(ret_codes)} results, expected {len(batch_keys)}")
+            for i, ret in enumerate(ret_codes):
+                if ret < 0:
+                    raise RuntimeError(f"batch_get_into failed for key `{batch_keys[i]}` with error code: {ret}")
+        finally:
+            self._unregister_all_buffers(batch_buffer_ptrs)
 
-            # Check result codes and validate tensors
-            # Note: Positive values indicate success (bytes read), negative values indicate error
-            for j, (tensor, shape, dtype, ret_code) in enumerate(
-                zip(batch_buffer_tensors, batch_shapes, batch_dtypes, ret_codes, strict=True)
-            ):
-                if ret_code < 0:
-                    raise RuntimeError(f"batch_get_into failed for key '{batch_keys[j]}' with error code: {ret_code}")
-                if tensor.shape != torch.Size(shape):
-                    raise RuntimeError(
-                        f"Shape mismatch for key '{batch_keys[j]}': expected {shape}, got {tensor.shape}"
-                    )
-                if tensor.dtype != dtype:
-                    raise RuntimeError(
-                        f"Dtype mismatch for key '{batch_keys[j]}': expected {dtype}, got {tensor.dtype}"
-                    )
-                tensors[i + j] = tensor
+        return batch_buffer_tensors, indexes
 
-        return tensors
-
-    def _batch_get_bytes(self, keys: list[str]) -> list[bytes]:
+    def _get_bytes_thread_worker(self, batch_keys: list[str], indexes: list[int]) -> tuple[list[Any], list[int]]:
         results = []
-        for i in range(0, len(keys), BATCH_SIZE_LIMIT):
-            batch_keys = keys[i : i + BATCH_SIZE_LIMIT]
-            batch_results = self._store.get_batch(batch_keys)
-            if len(batch_results) != len(batch_keys):
-                raise RuntimeError(f"get_batch returned {len(batch_results)} items, expected {len(batch_keys)}")
-            results.extend(batch_results)
-        return results
+
+        batch_results = self._store.get_batch(batch_keys)
+        if len(batch_results) != len(batch_keys):
+            raise RuntimeError(f"get_batch returned {len(batch_results)} items, expected {len(batch_keys)}")
+
+        batch_results = [pickle.loads(result) for result in batch_results]
+        results.extend(batch_results)
+
+        return results, indexes
 
     def clear(self, keys: list[str], custom_backend_meta=None):
         """Deletes multiple keys from MooncakeStore.
@@ -267,10 +267,10 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             keys (List[str]): List of keys to remove.
             custom_backend_meta (List[Any], optional): ...
         """
-        rets = self._store.batch_remove(keys, force=True)
-        for i, ret in enumerate(rets):
+        ret_codes = self._store.batch_remove(keys, force=True)
+        for i, ret in enumerate(ret_codes):
             if not (ret == 0 or ret == -704):
-                logger.error(f"remove failed for key '{keys[i]}' with error code: {ret}")
+                logger.error(f"remove failed for key `{keys[i]}` with error code: {ret}")
 
     def close(self):
         """Closes MooncakeStore."""
@@ -279,17 +279,19 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             self._store = None
 
     @staticmethod
-    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[Any], list[Any]]:
+    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[Any], list[Any], list[Tensor]]:
         ptr_list = []
         size_list = []
+        tensor_list = []  # hold reference for the contiguous tensor
         for t in values:
             t = t.contiguous()
+            tensor_list.append(t)
             ptr_list.append(t.data_ptr())
             size_list.append(t.nbytes)
-        return ptr_list, size_list
+        return ptr_list, size_list, tensor_list
 
     def _register_all_buffers(self, ptrs, sizes):
-        for ptr, size in zip(ptrs, sizes, strict=False):
+        for ptr, size in zip(ptrs, sizes, strict=True):
             self._store.register_buffer(ptr, size)
 
     def _unregister_all_buffers(self, ptrs):
