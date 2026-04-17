@@ -83,8 +83,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             self.metadata_server = self.metadata_server + "/metadata"
 
         self.replica_config = ReplicateConfig()
-        # FIXME: hard_pin support
-        # self.replica_config.with_hard_pin = True
+        self.replica_config.with_hard_pin = True
 
         self._store = MooncakeDistributedStore()
         ret = self._store.setup(
