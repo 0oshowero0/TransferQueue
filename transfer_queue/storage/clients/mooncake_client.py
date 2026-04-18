@@ -29,6 +29,11 @@ from transfer_queue.utils.tensor_utils import allocate_empty_tensors, get_nbytes
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
 
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
+    logger.addHandler(handler)
+
 MOONCAKE_STORE_IMPORTED: bool = True
 try:
     from mooncake.store import MooncakeDistributedStore, ReplicateConfig
@@ -144,8 +149,18 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
     def _put_tensors_thread_worker(self, batch_keys: list[str], batch_tensors: list[Tensor]):
         """Worker thread for putting batch of tensors to MooncakeStore."""
 
-        batch_ptrs, batch_sizes, contiguous_tensors = self._preprocess_tensors_for_put(batch_tensors)
+        batch_ptrs, batch_sizes, contiguous_tensors, copy_count = self._preprocess_tensors_for_put(batch_tensors)
         batch_ptr_reduced, batch_sizes_reduced = merge_continues_memory(batch_ptrs, batch_sizes)
+
+        expected_registers = len(batch_tensors)
+        actual_registers = len(batch_ptr_reduced)
+        savings = expected_registers - actual_registers
+
+        logger.info(
+            f"[MooncakeStoreClient] Zero-copy put stats: tensors={expected_registers}, "
+            f"register_regions={actual_registers}, savings={savings}, contiguous_copies={copy_count}"
+        )
+
         self._register_all_buffers(batch_ptr_reduced, batch_sizes_reduced)
 
         try:
@@ -278,16 +293,20 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             self._store = None
 
     @staticmethod
-    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[Any], list[Any], list[Tensor]]:
+    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[Any], list[Any], list[Tensor], int]:
         ptr_list = []
         size_list = []
         tensor_list = []  # hold reference for the contiguous tensor
+        copy_count = 0
         for t in values:
+            t_old = t
             t = t.contiguous()
             tensor_list.append(t)
             ptr_list.append(t.data_ptr())
             size_list.append(t.nbytes)
-        return ptr_list, size_list, tensor_list
+            if t.data_ptr() != t_old.data_ptr():
+                copy_count += 1
+        return ptr_list, size_list, tensor_list, copy_count
 
     def _register_all_buffers(self, ptrs, sizes):
         for ptr, size in zip(ptrs, sizes, strict=True):
