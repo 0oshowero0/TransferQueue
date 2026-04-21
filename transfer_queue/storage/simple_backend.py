@@ -342,10 +342,14 @@ class SimpleStorageUnit:
         """
         try:
             global_indexes = data_parts.body["global_indexes"]
-            field_data = data_parts.body["data"]  # field_data should be a TensorDict.
+            field_data = data_parts.body["data"]  # field_data should be a dict.
+            data_parser = data_parts.body.get("data_parser", None)
+
             with limit_pytorch_auto_parallel_threads(
                 target_num_threads=TQ_NUM_THREADS, info=f"[{self.storage_unit_id}] _handle_put"
             ):
+                if data_parser is not None:
+                    field_data = data_parser(field_data)
                 self.storage_data.put_data(field_data, global_indexes)
 
             # After put operation finish, send a message to the client

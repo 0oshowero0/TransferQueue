@@ -19,7 +19,7 @@ import os
 import subprocess
 import time
 from importlib import resources
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import ray
@@ -388,6 +388,7 @@ def kv_put(
     partition_id: str,
     fields: Optional[TensorDict | dict[str, Any]] = None,
     tag: Optional[dict[str, Any]] = None,
+    data_parser: Optional[Callable[[Any], Any]] = None,
 ) -> KVBatchMeta:
     """Put a single key-value pair to TransferQueue.
 
@@ -403,6 +404,9 @@ def kv_put(
                 If dict is provided, tensors will be unsqueezed to add batch dimension.
                 If not provided, will only update the newly given tag to the key.
         tag: Optional metadata tag to associate with the key
+        data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                     content. Receives a dict of field_name -> batched values and should
+                     return a dict with the same structure. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the key, tags, partition_id, and fields.
@@ -459,7 +463,7 @@ def kv_put(
             raise ValueError("`fields` can only be dict or TensorDict")
 
         # After put, batch_meta.field_names will include the new fields written by user
-        batch_meta = tq_client.put(fields, batch_meta)
+        batch_meta = tq_client.put(fields, batch_meta, data_parser=data_parser)
     else:
         # Directly update custom_meta (tag) to controller
         tq_client.set_custom_meta(batch_meta)
@@ -476,7 +480,11 @@ def kv_put(
 
 
 def kv_batch_put(
-    keys: list[str], partition_id: str, fields: Optional[TensorDict] = None, tags: Optional[list[dict[str, Any]]] = None
+    keys: list[str],
+    partition_id: str,
+    fields: Optional[TensorDict] = None,
+    tags: Optional[list[dict[str, Any]]] = None,
+    data_parser: Optional[Callable[[Any], Any]] = None,
 ) -> KVBatchMeta:
     """Put multiple key-value pairs to TransferQueue in batch.
 
@@ -489,6 +497,9 @@ def kv_batch_put(
         fields: TensorDict containing data for all keys. Must have batch_size == len(keys).
                 If not provided, will only update the newly given tags to the keys.
         tags: List of metadata tags, one for each key
+        data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                     content. Receives a dict of field_name -> batched values and should
+                     return a dict with the same structure. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the keys, tags, partition_id, and fields.
@@ -542,7 +553,7 @@ def kv_batch_put(
     # 3. put data
     if fields is not None:
         # After put, batch_meta.field_names will include the new fields written by user
-        batch_meta = tq_client.put(fields, batch_meta)
+        batch_meta = tq_client.put(fields, batch_meta, data_parser=data_parser)
     else:
         # Directly update custom_meta (tags) to controller
         tq_client.set_custom_meta(batch_meta)
@@ -742,6 +753,7 @@ async def async_kv_put(
     partition_id: str,
     fields: Optional[TensorDict | dict[str, Any]] = None,
     tag: Optional[dict[str, Any]] = None,
+    data_parser: Optional[Callable[[Any], Any]] = None,
 ) -> KVBatchMeta:
     """Asynchronously put a single key-value pair to TransferQueue.
 
@@ -757,6 +769,9 @@ async def async_kv_put(
                 If dict is provided, tensors will be unsqueezed to add batch dimension.
                 If not provided, will only update the newly given tag to the key.
         tag: Optional metadata tag to associate with the key
+        data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                     content. Receives a dict of field_name -> batched values and should
+                     return a dict with the same structure. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the key, tags, partition_id, and fields.
@@ -814,7 +829,7 @@ async def async_kv_put(
             raise ValueError("`fields` can only be dict or TensorDict")
 
         # After put, batch_meta.field_names will include the new fields written by user
-        batch_meta = await tq_client.async_put(fields, batch_meta)
+        batch_meta = await tq_client.async_put(fields, batch_meta, data_parser=data_parser)
     else:
         # Directly update custom_meta (tag) to controller
         await tq_client.async_set_custom_meta(batch_meta)
@@ -831,7 +846,11 @@ async def async_kv_put(
 
 
 async def async_kv_batch_put(
-    keys: list[str], partition_id: str, fields: Optional[TensorDict] = None, tags: Optional[list[dict[str, Any]]] = None
+    keys: list[str],
+    partition_id: str,
+    fields: Optional[TensorDict] = None,
+    tags: Optional[list[dict[str, Any]]] = None,
+    data_parser: Optional[Callable[[Any], Any]] = None,
 ) -> KVBatchMeta:
     """Asynchronously put multiple key-value pairs to TransferQueue in batch.
 
@@ -844,6 +863,9 @@ async def async_kv_batch_put(
         fields: TensorDict containing data for all keys. Must have batch_size == len(keys).
                 If not provided, will only update the newly given tags to the keys.
         tags: List of metadata tags, one for each key
+        data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                     content. Receives a dict of field_name -> batched values and should
+                     return a dict with the same structure. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the keys, tags, partition_id, and fields.
@@ -896,7 +918,7 @@ async def async_kv_batch_put(
     # 3. put data
     if fields is not None:
         # After put, batch_meta.field_names will include the new fields written by user
-        batch_meta = await tq_client.async_put(fields, batch_meta)
+        batch_meta = await tq_client.async_put(fields, batch_meta, data_parser=data_parser)
     else:
         # Directly update custom_meta (tags) to controller
         await tq_client.async_set_custom_meta(batch_meta)

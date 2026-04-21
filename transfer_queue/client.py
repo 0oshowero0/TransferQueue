@@ -324,6 +324,7 @@ class AsyncTransferQueueClient:
         data: TensorDict,
         metadata: Optional[BatchMeta] = None,
         partition_id: Optional[str] = None,
+        data_parser: Optional[Callable[[Any], Any]] = None,
     ) -> BatchMeta:
         """Asynchronously write data to storage units based on metadata.
 
@@ -342,6 +343,9 @@ class AsyncTransferQueueClient:
             metadata: Records the metadata of a batch of data samples, containing index and
                       storage unit information. If None, metadata will be auto-generated.
             partition_id: Target data partition id (required if metadata is not provided)
+            data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                         content. Receives a dict of field_name -> batched values and should
+                         return a dict with the same structure. Only supported by SimpleStorage.
 
         Returns:
             BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
@@ -411,7 +415,7 @@ class AsyncTransferQueueClient:
         with limit_pytorch_auto_parallel_threads(
             target_num_threads=TQ_NUM_THREADS, info=f"[{self.client_id}] async_put"
         ):
-            await self.storage_manager.put_data(data, metadata)
+            await self.storage_manager.put_data(data, metadata, data_parser=data_parser)
 
         await self.async_set_custom_meta(metadata)
 
@@ -1279,7 +1283,11 @@ class TransferQueueClient(AsyncTransferQueueClient):
         return self._set_custom_meta(metadata=metadata)
 
     def put(
-        self, data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None
+        self,
+        data: TensorDict,
+        metadata: Optional[BatchMeta] = None,
+        partition_id: Optional[str] = None,
+        data_parser: Optional[Callable[[Any], Any]] = None,
     ) -> BatchMeta:
         """Synchronously write data to storage units based on metadata.
 
@@ -1298,6 +1306,9 @@ class TransferQueueClient(AsyncTransferQueueClient):
             metadata: Records the metadata of a batch of data samples, containing index and
                       storage unit information. If None, metadata will be auto-generated.
             partition_id: Target data partition id (required if metadata is not provided)
+            data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                         content. Receives a dict of field_name -> batched values and should
+                         return a dict with the same structure. Only supported by SimpleStorage.
 
         Returns:
             BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
@@ -1336,7 +1347,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
             >>> # This will create metadata in "insert" mode internally.
             >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
         """
-        return self._put(data=data, metadata=metadata, partition_id=partition_id)
+        return self._put(data=data, metadata=metadata, partition_id=partition_id, data_parser=data_parser)
 
     def get_data(self, metadata: BatchMeta) -> TensorDict:
         """Synchronously fetch data from storage units and organize into TensorDict.

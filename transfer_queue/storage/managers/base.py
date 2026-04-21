@@ -21,7 +21,7 @@ import time
 import weakref
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 import ray
@@ -306,13 +306,17 @@ class TransferQueueStorageManager(ABC):
                 pass
 
     @abstractmethod
-    async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
+    async def put_data(
+        self, data: TensorDict, metadata: BatchMeta, data_parser: Optional[Callable[[Any], Any]] = None
+    ) -> None:
         """
         Put data into the storage backend.
 
         Args:
             data: Data to be put into the storage.
             metadata: BatchMeta of the corresponding data.
+            data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                         content. Only supported by SimpleStorage backend.
         """
         raise NotImplementedError("Subclasses must implement put_data")
 
@@ -561,10 +565,17 @@ class KVStorageManager(TransferQueueStorageManager):
             )
         return shapes, dtypes, custom_backend_meta_list
 
-    async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
+    async def put_data(
+        self, data: TensorDict, metadata: BatchMeta, data_parser: Optional[Callable[[Any], Any]] = None
+    ) -> None:
         """
         Store tensor data in the backend storage and notify the controller.
         """
+        if data_parser is not None:
+            raise NotImplementedError(
+                "data_parser is not supported for KV-based backends (MooncakeStore, Yuanrong, RayStore)."
+            )
+
         num_samples = len(metadata.global_indexes)
         if data.batch_size[0] != num_samples:
             raise ValueError(f"Batch size of data ({data.batch_size[0]}) does not match expected ({num_samples})")

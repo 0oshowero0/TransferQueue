@@ -34,11 +34,14 @@ class MockStorageClient:
         self.socket.setsockopt(zmq.RCVTIMEO, 5000)  # 5 second timeout
         self.socket.connect(storage_put_get_address)
 
-    def send_put(self, client_id, global_indexes, field_data):
+    def send_put(self, client_id, global_indexes, field_data, data_parser=None):
+        body = {"global_indexes": global_indexes, "data": field_data}
+        if data_parser is not None:
+            body["data_parser"] = data_parser
         msg = ZMQMessage.create(
             request_type=ZMQRequestType.PUT_DATA,
             sender_id=f"mock_client_{client_id}",
-            body={"global_indexes": global_indexes, "data": field_data},
+            body=body,
         )
         self.socket.send_multipart(msg.serialize())
         return ZMQMessage.deserialize(self.socket.recv_multipart(copy=False))
@@ -434,3 +437,54 @@ def test_storage_unit_data_capacity_uses_active_keys():
     assert len(storage._active_keys) == 2
     storage.put_data({"f": [4]}, global_indexes=[3])
     assert storage._active_keys == {0, 1, 3}
+
+
+def test_storage_unit_data_parser(storage_setup):
+    """Test data_parser functionality in SimpleStorageUnit.
+
+    Writes two columns:
+    - normal_data: regular tensors, should remain unchanged
+    - data_to_be_parsed: list of shape descriptors (list of ints)
+
+    data_parser converts shape descriptors into random tensors of those shapes.
+    """
+    _, put_get_address = storage_setup
+    client = MockStorageClient(put_get_address)
+
+    def create_data_by_shape_parser(field_data):
+        if "data_to_be_parsed" in field_data:
+            shapes = field_data["data_to_be_parsed"]
+            field_data["data_to_be_parsed"] = [torch.randn(shape) for shape in shapes]
+        return field_data
+
+    # Prepare data: normal_data is a batch tensor, data_to_be_parsed is a list of shape lists
+    field_data = {
+        "normal_data": torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
+        "data_to_be_parsed": [[2, 3], [1, 4], [3, 2]],
+    }
+    global_indexes = [0, 1, 2]
+
+    # Put with data_parser
+    response = client.send_put(0, global_indexes, field_data, data_parser=create_data_by_shape_parser)
+    assert response.request_type == ZMQRequestType.PUT_DATA_RESPONSE, f"Put failed: {response.body}"
+
+    # Get back
+    response = client.send_get(0, global_indexes, ["normal_data", "data_to_be_parsed"])
+    assert response.request_type == ZMQRequestType.GET_DATA_RESPONSE
+
+    result = response.body["data"]
+
+    # Verify normal_data is unchanged
+    torch.testing.assert_close(result["normal_data"][0], torch.tensor([1.0, 2.0]))
+    torch.testing.assert_close(result["normal_data"][1], torch.tensor([3.0, 4.0]))
+    torch.testing.assert_close(result["normal_data"][2], torch.tensor([5.0, 6.0]))
+
+    # Verify data_to_be_parsed shapes match the input shape descriptors
+    expected_shapes = [(2, 3), (1, 4), (3, 2)]
+    for i, expected_shape in enumerate(expected_shapes):
+        actual_shape = tuple(result["data_to_be_parsed"][i].shape)
+        assert actual_shape == expected_shape, (
+            f"Shape mismatch at index {i}: expected {expected_shape}, got {actual_shape}"
+        )
+
+    client.close()
