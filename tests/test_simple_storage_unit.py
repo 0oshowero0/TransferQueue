@@ -488,3 +488,84 @@ def test_storage_unit_data_parser(storage_setup):
         )
 
     client.close()
+
+
+def test_storage_unit_data_parser_callable_types(storage_setup):
+    """Test that various callable types (partial, callable class) work as data_parser."""
+    _, put_get_address = storage_setup
+    client = MockStorageClient(put_get_address)
+
+    from functools import partial
+
+    # 1. Test functools.partial
+    def _partial_parser(field_data, prefix):
+        if "text" in field_data:
+            field_data["text"] = [f"{prefix}{t}" for t in field_data["text"]]
+        return field_data
+
+    partial_parser = partial(_partial_parser, prefix="parsed_")
+
+    response = client.send_put(
+        0,
+        [0, 1],
+        {"text": ["a", "b"]},
+        data_parser=partial_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_DATA_RESPONSE, f"partial parser failed: {response.body}"
+
+    response = client.send_get(0, [0, 1], ["text"])
+    assert response.request_type == ZMQRequestType.GET_DATA_RESPONSE
+    assert response.body["data"]["text"] == ["parsed_a", "parsed_b"]
+
+    # 2. Test callable class instance
+    class CallableParser:
+        def __call__(self, field_data):
+            if "value" in field_data:
+                field_data["value"] = [v * 2 for v in field_data["value"]]
+            return field_data
+
+    callable_parser = CallableParser()
+    response = client.send_put(
+        0,
+        [2, 3],
+        {"value": [1, 2]},
+        data_parser=callable_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_DATA_RESPONSE, f"callable class parser failed: {response.body}"
+
+    response = client.send_get(0, [2, 3], ["value"])
+    assert response.request_type == ZMQRequestType.GET_DATA_RESPONSE
+    assert response.body["data"]["value"] == [2, 4]
+
+    client.close()
+
+
+def test_storage_unit_data_parser_validation(storage_setup):
+    """Test that invalid data_parser inputs produce clear error messages."""
+    _, put_get_address = storage_setup
+    client = MockStorageClient(put_get_address)
+
+    # 1. Non-callable data_parser should return a clear TypeError
+    response = client.send_put(
+        0,
+        [0],
+        {"data": [1]},
+        data_parser="not_callable",
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must be callable" in response.body["message"]
+
+    # 2. data_parser returning non-dict should return a clear TypeError
+    def bad_parser(field_data):
+        return "not_a_dict"
+
+    response = client.send_put(
+        0,
+        [1],
+        {"data": [1]},
+        data_parser=bad_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must return a dict" in response.body["message"]
+
+    client.close()

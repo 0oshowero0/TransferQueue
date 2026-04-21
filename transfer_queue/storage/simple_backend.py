@@ -349,7 +349,11 @@ class SimpleStorageUnit:
                 target_num_threads=TQ_NUM_THREADS, info=f"[{self.storage_unit_id}] _handle_put"
             ):
                 if data_parser is not None:
+                    if not callable(data_parser):
+                        raise TypeError(f"data_parser must be callable, got {type(data_parser).__name__}")
                     field_data = data_parser(field_data)
+                    if not isinstance(field_data, dict):
+                        raise TypeError(f"data_parser must return a dict, got {type(field_data).__name__}")
                 self.storage_data.put_data(field_data, global_indexes)
 
             # After put operation finish, send a message to the client

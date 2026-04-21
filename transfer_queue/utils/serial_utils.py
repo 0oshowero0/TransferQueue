@@ -23,7 +23,6 @@ import pickle
 import warnings
 from collections.abc import Sequence
 from contextvars import ContextVar
-from types import FunctionType
 from typing import Any, TypeAlias
 
 import cloudpickle
@@ -118,8 +117,9 @@ class MsgpackEncoder:
             # Only true object arrays (or structured dtypes with object fields) reach here
             return msgpack.Ext(CUSTOM_TYPE_PICKLE, pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
 
-        if isinstance(obj, FunctionType):
-            # cloudpickle for functions/methods
+        if callable(obj):
+            # cloudpickle for arbitrary callables (functions, lambdas, functools.partial,
+            # callable class instances, bound methods, etc.)
             return msgpack.Ext(CUSTOM_TYPE_CLOUDPICKLE, cloudpickle.dumps(obj))
 
         # Fallback to pickle for unknown types
