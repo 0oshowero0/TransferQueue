@@ -410,10 +410,10 @@ def kv_put(
                      mapping field_name -> batched values. For a regular tensor column
                      the value is a batched tensor; for nested tensors (jagged or
                      strided) and NonTensorStack columns the values are extracted into
-                     a list. It must return a dict of the same format with the exact
-                     same keys and the same number of elements per column; do not
-                     change the inner order of values within each column. Only
-                     supported by SimpleStorage.
+                     a list. It must modify values in-place based on the original keys;
+                     do not add or remove keys. The number of elements per column must
+                     also remain unchanged. Do not change the inner order of values
+                     within each column. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the key, tags, partition_id, and fields.
@@ -510,10 +510,10 @@ def kv_batch_put(
                      mapping field_name -> batched values. For a regular tensor column
                      the value is a batched tensor; for nested tensors (jagged or
                      strided) and NonTensorStack columns the values are extracted into
-                     a list. It must return a dict of the same format with the exact
-                     same keys and the same number of elements per column; do not
-                     change the inner order of values within each column. Only
-                     supported by SimpleStorage.
+                     a list. It must modify values in-place based on the original keys;
+                     do not add or remove keys. The number of elements per column must
+                     also remain unchanged. Do not change the inner order of values
+                     within each column. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the keys, tags, partition_id, and fields.
@@ -789,10 +789,10 @@ async def async_kv_put(
                      mapping field_name -> batched values. For a regular tensor column
                      the value is a batched tensor; for nested tensors (jagged or
                      strided) and NonTensorStack columns the values are extracted into
-                     a list. It must return a dict of the same format with the exact
-                     same keys and the same number of elements per column; do not
-                     change the inner order of values within each column. Only
-                     supported by SimpleStorage.
+                     a list. It must modify values in-place based on the original keys;
+                     do not add or remove keys. The number of elements per column must
+                     also remain unchanged. Do not change the inner order of values
+                     within each column. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the key, tags, partition_id, and fields.
@@ -890,10 +890,10 @@ async def async_kv_batch_put(
                      mapping field_name -> batched values. For a regular tensor column
                      the value is a batched tensor; for nested tensors (jagged or
                      strided) and NonTensorStack columns the values are extracted into
-                     a list. It must return a dict of the same format with the exact
-                     same keys and the same number of elements per column; do not
-                     change the inner order of values within each column. Only
-                     supported by SimpleStorage.
+                     a list. It must modify values in-place based on the original keys;
+                     do not add or remove keys. The number of elements per column must
+                     also remain unchanged. Do not change the inner order of values
+                     within each column. Only supported by SimpleStorage.
 
     Returns:
         KVBatchMeta: Metadata containing the keys, tags, partition_id, and fields.
