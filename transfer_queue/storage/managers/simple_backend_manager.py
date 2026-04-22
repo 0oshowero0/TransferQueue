@@ -298,7 +298,14 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             data: TensorDict containing the data to store.
             metadata: BatchMeta containing storage location information.
             data_parser: Optional callable to parse reference data (e.g., URLs) into real
-                         content. Executed distributedly on each SimpleStorageUnit.
+                         content. The input is a plain dict (not TensorDict) mapping
+                         field_name -> batched values. For a regular tensor column the
+                         value is a batched tensor; for nested tensors (jagged or strided)
+                         and NonTensorStack columns the values are extracted into a list.
+                         It must return a dict of the same format with the exact same keys
+                         and the same number of elements per column; do not change the
+                         inner order of values within each column. Executed distributedly
+                         on each SimpleStorageUnit.
         """
 
         logger.debug(f"[{self.storage_manager_id}]: receive put_data request, putting {metadata.size} samples.")

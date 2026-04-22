@@ -351,9 +351,45 @@ class SimpleStorageUnit:
                 if data_parser is not None:
                     if not callable(data_parser):
                         raise TypeError(f"data_parser must be callable, got {type(data_parser).__name__}")
+
+                    original_keys = set(field_data.keys())
+                    original_lengths = {}
+                    for k, v in field_data.items():
+                        if hasattr(v, "shape") and isinstance(v.shape, tuple | list) and len(v.shape) > 0:
+                            original_lengths[k] = v.shape[0]
+                        else:
+                            try:
+                                original_lengths[k] = len(v)
+                            except Exception:
+                                original_lengths[k] = None
+
                     field_data = data_parser(field_data)
+
                     if not isinstance(field_data, dict):
                         raise TypeError(f"data_parser must return a dict, got {type(field_data).__name__}")
+
+                    new_keys = set(field_data.keys())
+                    if new_keys != original_keys:
+                        raise ValueError(
+                            f"data_parser must not change dict keys. "
+                            f"Original keys: {sorted(original_keys)}, got: {sorted(new_keys)}"
+                        )
+
+                    for k, v in field_data.items():
+                        if hasattr(v, "shape") and isinstance(v.shape, tuple | list) and len(v.shape) > 0:
+                            new_len = v.shape[0]
+                        else:
+                            try:
+                                new_len = len(v)
+                            except Exception:
+                                new_len = None
+
+                        orig_len = original_lengths[k]
+                        if orig_len is not None and new_len is not None and orig_len != new_len:
+                            raise ValueError(
+                                f"data_parser changed the number of elements for key '{k}': "
+                                f"expected {orig_len}, got {new_len}"
+                            )
                 self.storage_data.put_data(field_data, global_indexes)
 
             # After put operation finish, send a message to the client

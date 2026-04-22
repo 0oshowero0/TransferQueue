@@ -568,4 +568,46 @@ def test_storage_unit_data_parser_validation(storage_setup):
     assert response.request_type == ZMQRequestType.PUT_ERROR
     assert "data_parser must return a dict" in response.body["message"]
 
+    # 3. data_parser deleting a key should return a clear ValueError
+    def delete_key_parser(field_data):
+        del field_data["data"]
+        return field_data
+
+    response = client.send_put(
+        0,
+        [2],
+        {"data": [1], "extra": [2]},
+        data_parser=delete_key_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must not change dict keys" in response.body["message"]
+
+    # 4. data_parser adding a key should return a clear ValueError
+    def add_key_parser(field_data):
+        field_data["new_key"] = [999]
+        return field_data
+
+    response = client.send_put(
+        0,
+        [3],
+        {"data": [1]},
+        data_parser=add_key_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must not change dict keys" in response.body["message"]
+
+    # 5. data_parser changing element count should return a clear ValueError
+    def wrong_len_parser(field_data):
+        field_data["data"] = field_data["data"][:-1]
+        return field_data
+
+    response = client.send_put(
+        0,
+        [4, 5],
+        {"data": [1, 2]},
+        data_parser=wrong_len_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser changed the number of elements" in response.body["message"]
+
     client.close()

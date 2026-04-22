@@ -344,8 +344,14 @@ class AsyncTransferQueueClient:
                       storage unit information. If None, metadata will be auto-generated.
             partition_id: Target data partition id (required if metadata is not provided)
             data_parser: Optional callable to parse reference data (e.g., URLs) into real
-                         content. Receives a dict of field_name -> batched values and should
-                         return a dict with the same structure. Only supported by SimpleStorage.
+                         content. The input is a slice of the `data` parameter, in plain
+                         dict format (not TensorDict), mapping field_name -> batched values.
+                         For a regular tensor column the value is a batched tensor; for
+                         nested tensors (jagged or strided) and NonTensorStack columns
+                         the values are extracted into a list. It must return a dict of
+                         the same format with the exact same keys and the same number of
+                         elements per column; do not change the inner order of values
+                         within each column. Only supported by SimpleStorage.
 
         Returns:
             BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
@@ -1307,8 +1313,14 @@ class TransferQueueClient(AsyncTransferQueueClient):
                       storage unit information. If None, metadata will be auto-generated.
             partition_id: Target data partition id (required if metadata is not provided)
             data_parser: Optional callable to parse reference data (e.g., URLs) into real
-                         content. Receives a dict of field_name -> batched values and should
-                         return a dict with the same structure. Only supported by SimpleStorage.
+                         content. The input is a slice of the `data` parameter, in plain
+                         dict format (not TensorDict), mapping field_name -> batched values.
+                         For a regular tensor column the value is a batched tensor; for
+                         nested tensors (jagged or strided) and NonTensorStack columns
+                         the values are extracted into a list. It must return a dict of
+                         the same format with the exact same keys and the same number of
+                         elements per column; do not change the inner order of values
+                         within each column. Only supported by SimpleStorage.
 
         Returns:
             BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved

@@ -316,7 +316,14 @@ class TransferQueueStorageManager(ABC):
             data: Data to be put into the storage.
             metadata: BatchMeta of the corresponding data.
             data_parser: Optional callable to parse reference data (e.g., URLs) into real
-                         content. Only supported by SimpleStorage backend.
+                         content. The input is a plain dict (not TensorDict) mapping
+                         field_name -> batched values. For a regular tensor column the
+                         value is a batched tensor; for nested tensors (jagged or strided)
+                         and NonTensorStack columns the values are extracted into a list.
+                         It must return a dict of the same format with the exact same keys
+                         and the same number of elements per column; do not change the
+                         inner order of values within each column. Only supported by
+                         SimpleStorage backend.
         """
         raise NotImplementedError("Subclasses must implement put_data")
 
