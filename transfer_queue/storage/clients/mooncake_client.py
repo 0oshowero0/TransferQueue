@@ -24,7 +24,7 @@ from torch import Tensor
 
 from transfer_queue.storage.clients.base import TransferQueueStorageKVClient
 from transfer_queue.storage.clients.factory import StorageClientFactory
-from transfer_queue.utils.tensor_utils import allocate_empty_tensors, get_nbytes, merge_continues_memory
+from transfer_queue.utils.tensor_utils import allocate_empty_tensors, get_nbytes, merge_contiguous_memory
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
@@ -144,8 +144,8 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
     def _put_tensors_thread_worker(self, batch_keys: list[str], batch_tensors: list[Tensor]):
         """Worker thread for putting batch of tensors to MooncakeStore."""
 
-        batch_ptrs, batch_sizes, contiguous_tensors = self._preprocess_tensors_for_put(batch_tensors)
-        batch_ptr_reduced, batch_sizes_reduced = merge_continues_memory(batch_ptrs, batch_sizes)
+        batch_ptrs, batch_sizes, _contiguous_tensors = self._preprocess_tensors_for_put(batch_tensors)
+        batch_ptr_reduced, batch_sizes_reduced = merge_contiguous_memory(batch_ptrs, batch_sizes)
         self._register_all_buffers(batch_ptr_reduced, batch_sizes_reduced)
 
         try:
@@ -154,19 +154,19 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
                 failed_indices = [j for j, r in enumerate(results) if r != 0]
                 error_codes = [results[j] for j in failed_indices]
                 raise RuntimeError(
-                    f"batch_put_tensor failed for indices {failed_indices} with error codes: {error_codes}"
+                    f"batch_upsert_from failed for indices {failed_indices} with error codes: {error_codes}"
                 )
         finally:
             self._unregister_all_buffers(batch_ptr_reduced)
 
-    def _put_bytes_thread_worker(self, batch_keys: list[str], batch_values: list[bytes]):
+    def _put_bytes_thread_worker(self, batch_keys: list[str], batch_values: list[Any]):
         """Worker thread for putting batch of non-tensors to MooncakeStore."""
 
         batch_values = [pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL) for v in batch_values]
 
         ret = self._store.upsert_batch(batch_keys, batch_values, self.replica_config)
         if ret != 0:
-            raise RuntimeError(f"put_batch failed with error code: {ret}")
+            raise RuntimeError(f"upsert_batch failed with error code: {ret}")
 
     def get(
         self,
@@ -232,9 +232,11 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
         self, batch_keys: list[str], batch_shapes: list[tuple], batch_dtypes: list[torch.dtype], indexes: list[int]
     ) -> tuple[list[Tensor], list[int]]:
         batch_nbytes = get_nbytes(batch_dtypes, batch_shapes)
-        batch_buffer_tensors, batch_buffer_ptrs = allocate_empty_tensors(batch_dtypes, batch_shapes)
+        batch_buffer_tensors, batch_buffer_ptrs, region_ptrs, region_sizes = allocate_empty_tensors(
+            batch_dtypes, batch_shapes
+        )
 
-        self._register_all_buffers(batch_buffer_ptrs, batch_nbytes)
+        self._register_all_buffers(region_ptrs, region_sizes)
         try:
             ret_codes = self._store.batch_get_into(batch_keys, batch_buffer_ptrs, batch_nbytes)
             if len(ret_codes) != len(batch_keys):
@@ -243,7 +245,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
                 if ret < 0:
                     raise RuntimeError(f"batch_get_into failed for key `{batch_keys[i]}` with error code: {ret}")
         finally:
-            self._unregister_all_buffers(batch_buffer_ptrs)
+            self._unregister_all_buffers(region_ptrs)
 
         return batch_buffer_tensors, indexes
 
@@ -283,6 +285,11 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
         size_list = []
         tensor_list = []  # hold reference for the contiguous tensor
         for t in values:
+            # TODO: support gpu direct rdma and use different data paths.
+            #       For GPU, it's more reasonable to perform data copy since
+            #       The register overhead is much higher than CPU
+            if t.device.type == "cuda":
+                t = t.cpu()
             t = t.contiguous()
             tensor_list.append(t)
             ptr_list.append(t.data_ptr())
