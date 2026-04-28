@@ -141,7 +141,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
 
         return None
 
-    def _put_tensors_thread_worker(self, batch_keys: list[str], batch_tensors: list[Tensor]):
+    def _put_tensors_thread_worker(self, batch_keys: list[str], batch_tensors: list[Tensor]) -> None:
         """Worker thread for putting batch of tensors to MooncakeStore."""
 
         batch_ptrs, batch_sizes, _contiguous_tensors = self._preprocess_tensors_for_put(batch_tensors)
@@ -261,7 +261,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
 
         return results, indexes
 
-    def clear(self, keys: list[str], custom_backend_meta=None):
+    def clear(self, keys: list[str], custom_backend_meta: Optional[list[Any]] = None) -> None:
         """Deletes multiple keys from MooncakeStore.
 
         Args:
@@ -280,10 +280,10 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
             self._store = None
 
     @staticmethod
-    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[Any], list[Any], list[Tensor]]:
-        ptr_list = []
-        size_list = []
-        tensor_list = []  # hold reference for the contiguous tensor
+    def _preprocess_tensors_for_put(values: list[Tensor]) -> tuple[list[int], list[int], list[Tensor]]:
+        ptr_list: list[int] = []
+        size_list: list[int] = []
+        tensor_list: list[Tensor] = []  # hold reference for the contiguous tensor
         for t in values:
             # TODO: support gpu direct rdma and use different data paths.
             #       For GPU, it's more reasonable to perform data copy since
