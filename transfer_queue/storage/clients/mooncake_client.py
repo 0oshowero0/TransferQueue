@@ -256,7 +256,7 @@ class MooncakeStoreClient(TransferQueueStorageKVClient):
         if len(batch_results) != len(batch_keys):
             raise RuntimeError(f"get_batch returned {len(batch_results)} items, expected {len(batch_keys)}")
 
-        batch_results = [pickle.loads(result) for result in batch_results]
+        batch_results = [pickle.loads(result) if result != b"" else None for result in batch_results]
         results.extend(batch_results)
 
         return results, indexes
