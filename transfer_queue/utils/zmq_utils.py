@@ -13,30 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
-import os
 import socket
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, TypeAlias
+from functools import wraps
+from typing import Any, Callable, Optional, TypeAlias
 from uuid import uuid4
 
 import psutil
 import ray
 import zmq
+import zmq.asyncio
 from ray.util import get_node_ip_address
 
 from transfer_queue.utils.enum_utils import ExplicitEnum, TransferQueueRole
+from transfer_queue.utils.logging_utils import get_logger
 from transfer_queue.utils.serial_utils import decode, encode
 
-logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
-
-# Ensure logger has a handler
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
-    logger.addHandler(handler)
+logger = get_logger(__name__)
 
 
 bytestr: TypeAlias = bytes | bytearray | memoryview
@@ -299,6 +293,80 @@ def create_zmq_socket(
     if identity is not None:
         socket.setsockopt(zmq.IDENTITY, identity)
     return socket
+
+
+def with_zmq_socket(
+    socket_name: str,
+    *,
+    get_identity: Callable[[Any], str],
+    get_peer: Callable[[Any, Optional[str]], ZMQServerInfo],
+    resolve_target: Optional[Callable[[tuple, dict], Optional[str]]] = None,
+    timeout: Optional[int] = None,
+):
+    """Create a reusable async decorator for request sockets.
+
+    This decorator encapsulates the common socket lifecycle used by both
+    client-side and storage-manager-side request paths:
+    create context/socket -> connect -> inject socket -> close/term.
+
+    Args:
+        socket_name: Socket port key in ``ZMQServerInfo.ports``.
+        get_identity: Callable that extracts owner identity from ``self``.
+            Example: ``lambda self: self.client_id``
+        get_peer: Callable that returns ``ZMQServerInfo`` for the target.
+            For single-target scenarios, ignore the target parameter.
+            Example: ``lambda self, target: self.server_info``
+            Example: ``lambda self, target: self.storage_unit_infos[target]``
+        resolve_target: Optional callable that extracts target identifier from
+            function arguments. Receives (args, kwargs) and returns target name.
+            Example: ``lambda args, kwargs: kwargs.get("target_storage_unit")``
+        timeout: Optional timeout (seconds) for both send/recv operations.
+    """
+
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(self, *args, **kwargs):
+            owner_id = get_identity(self)
+            if owner_id is None:
+                raise RuntimeError("get_identity returned None")
+
+            target_name: Optional[str] = None
+            if resolve_target is not None:
+                target_name = resolve_target(args, kwargs)
+
+            server_info = get_peer(self, target_name)
+            if server_info is None:
+                raise RuntimeError(f"get_peer returned None for target '{target_name}'")
+
+            port = server_info.ports.get(socket_name)
+            if port is None:
+                raise RuntimeError(f"Socket '{socket_name}' not configured for server '{server_info.id}'")
+
+            context = zmq.asyncio.Context()
+            sock = None
+            try:
+                address = format_zmq_address(server_info.ip, port)
+                identity = f"{owner_id}_to_{server_info.id}_{uuid4().hex[:8]}".encode()
+                sock = create_zmq_socket(context, zmq.DEALER, server_info.ip, identity=identity)
+                sock.connect(address)
+                if timeout is not None:
+                    sock.setsockopt(zmq.RCVTIMEO, timeout * 1000)
+                    sock.setsockopt(zmq.SNDTIMEO, timeout * 1000)
+                kwargs["socket"] = sock
+                return await func(self, *args, **kwargs)
+            finally:
+                if sock is not None:
+                    try:
+                        if not sock.closed:
+                            sock.close(linger=-1)
+                    finally:
+                        context.term()
+                else:
+                    context.term()
+
+        return wrapper
+
+    return decorator
 
 
 def process_zmq_server_info(

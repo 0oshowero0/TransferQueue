@@ -34,11 +34,14 @@ class MockStorageClient:
         self.socket.setsockopt(zmq.RCVTIMEO, 5000)  # 5 second timeout
         self.socket.connect(storage_put_get_address)
 
-    def send_put(self, client_id, global_indexes, field_data):
+    def send_put(self, client_id, global_indexes, field_data, data_parser=None):
+        body = {"global_indexes": global_indexes, "data": field_data}
+        if data_parser is not None:
+            body["data_parser"] = data_parser
         msg = ZMQMessage.create(
             request_type=ZMQRequestType.PUT_DATA,
             sender_id=f"mock_client_{client_id}",
-            body={"global_indexes": global_indexes, "data": field_data},
+            body=body,
         )
         self.socket.send_multipart(msg.serialize())
         return ZMQMessage.deserialize(self.socket.recv_multipart(copy=False))
@@ -434,3 +437,177 @@ def test_storage_unit_data_capacity_uses_active_keys():
     assert len(storage._active_keys) == 2
     storage.put_data({"f": [4]}, global_indexes=[3])
     assert storage._active_keys == {0, 1, 3}
+
+
+def test_storage_unit_data_parser(storage_setup):
+    """Test data_parser functionality in SimpleStorageUnit.
+
+    Writes two columns:
+    - normal_data: regular tensors, should remain unchanged
+    - data_to_be_parsed: list of shape descriptors (list of ints)
+
+    data_parser converts shape descriptors into random tensors of those shapes.
+    """
+    _, put_get_address = storage_setup
+    client = MockStorageClient(put_get_address)
+
+    def create_data_by_shape_parser(field_data):
+        if "data_to_be_parsed" in field_data:
+            shapes = field_data["data_to_be_parsed"]
+            field_data["data_to_be_parsed"] = [torch.randn(shape) for shape in shapes]
+        return field_data
+
+    # Prepare data: normal_data is a batch tensor, data_to_be_parsed is a list of shape lists
+    field_data = {
+        "normal_data": torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
+        "data_to_be_parsed": [[2, 3], [1, 4], [3, 2]],
+    }
+    global_indexes = [0, 1, 2]
+
+    # Put with data_parser
+    response = client.send_put(0, global_indexes, field_data, data_parser=create_data_by_shape_parser)
+    assert response.request_type == ZMQRequestType.PUT_DATA_RESPONSE, f"Put failed: {response.body}"
+
+    # Get back
+    response = client.send_get(0, global_indexes, ["normal_data", "data_to_be_parsed"])
+    assert response.request_type == ZMQRequestType.GET_DATA_RESPONSE
+
+    result = response.body["data"]
+
+    # Verify normal_data is unchanged
+    torch.testing.assert_close(result["normal_data"][0], torch.tensor([1.0, 2.0]))
+    torch.testing.assert_close(result["normal_data"][1], torch.tensor([3.0, 4.0]))
+    torch.testing.assert_close(result["normal_data"][2], torch.tensor([5.0, 6.0]))
+
+    # Verify data_to_be_parsed shapes match the input shape descriptors
+    expected_shapes = [(2, 3), (1, 4), (3, 2)]
+    for i, expected_shape in enumerate(expected_shapes):
+        actual_shape = tuple(result["data_to_be_parsed"][i].shape)
+        assert actual_shape == expected_shape, (
+            f"Shape mismatch at index {i}: expected {expected_shape}, got {actual_shape}"
+        )
+
+    client.close()
+
+
+def test_storage_unit_data_parser_callable_types(storage_setup):
+    """Test that various callable types (partial, callable class) work as data_parser."""
+    _, put_get_address = storage_setup
+    client = MockStorageClient(put_get_address)
+
+    from functools import partial
+
+    # 1. Test functools.partial
+    def _partial_parser(field_data, prefix):
+        if "text" in field_data:
+            field_data["text"] = [f"{prefix}{t}" for t in field_data["text"]]
+        return field_data
+
+    partial_parser = partial(_partial_parser, prefix="parsed_")
+
+    response = client.send_put(
+        0,
+        [0, 1],
+        {"text": ["a", "b"]},
+        data_parser=partial_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_DATA_RESPONSE, f"partial parser failed: {response.body}"
+
+    response = client.send_get(0, [0, 1], ["text"])
+    assert response.request_type == ZMQRequestType.GET_DATA_RESPONSE
+    assert response.body["data"]["text"] == ["parsed_a", "parsed_b"]
+
+    # 2. Test callable class instance
+    class CallableParser:
+        def __call__(self, field_data):
+            if "value" in field_data:
+                field_data["value"] = [v * 2 for v in field_data["value"]]
+            return field_data
+
+    callable_parser = CallableParser()
+    response = client.send_put(
+        0,
+        [2, 3],
+        {"value": [1, 2]},
+        data_parser=callable_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_DATA_RESPONSE, f"callable class parser failed: {response.body}"
+
+    response = client.send_get(0, [2, 3], ["value"])
+    assert response.request_type == ZMQRequestType.GET_DATA_RESPONSE
+    assert response.body["data"]["value"] == [2, 4]
+
+    client.close()
+
+
+def test_storage_unit_data_parser_validation(storage_setup):
+    """Test that invalid data_parser inputs produce clear error messages."""
+    _, put_get_address = storage_setup
+    client = MockStorageClient(put_get_address)
+
+    # 1. Non-callable data_parser should return a clear TypeError
+    response = client.send_put(
+        0,
+        [0],
+        {"data": [1]},
+        data_parser="not_callable",
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must be callable" in response.body["message"]
+
+    # 2. data_parser returning non-dict should return a clear TypeError
+    def bad_parser(field_data):
+        return "not_a_dict"
+
+    response = client.send_put(
+        0,
+        [1],
+        {"data": [1]},
+        data_parser=bad_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must return a dict" in response.body["message"]
+
+    # 3. data_parser deleting a key should return a clear ValueError
+    def delete_key_parser(field_data):
+        del field_data["data"]
+        return field_data
+
+    response = client.send_put(
+        0,
+        [2],
+        {"data": [1], "extra": [2]},
+        data_parser=delete_key_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must not change dict keys" in response.body["message"]
+
+    # 4. data_parser adding a key should return a clear ValueError
+    def add_key_parser(field_data):
+        field_data["new_key"] = [999]
+        return field_data
+
+    response = client.send_put(
+        0,
+        [3],
+        {"data": [1]},
+        data_parser=add_key_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser must not change dict keys" in response.body["message"]
+
+    # 5. data_parser changing element count should return a clear ValueError
+    def wrong_len_parser(field_data):
+        field_data["data"] = field_data["data"][:-1]
+        return field_data
+
+    response = client.send_put(
+        0,
+        [4, 5],
+        {"data": [1, 2]},
+        data_parser=wrong_len_parser,
+    )
+    assert response.request_type == ZMQRequestType.PUT_ERROR
+    assert "data_parser changed the number of elements" in response.body["message"]
+
+    client.close()

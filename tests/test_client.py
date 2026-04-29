@@ -418,7 +418,7 @@ def client_setup(mock_controller, mock_storage):
         client.initialize_storage_manager(manager_type="SimpleStorage", config=config)
 
         # Mock all storage manager methods to avoid real ZMQ operations
-        async def mock_put_data(data, metadata):
+        async def mock_put_data(data, metadata, data_parser=None):
             pass  # Just pretend to store the data
 
         async def mock_get_data(metadata):
@@ -511,7 +511,7 @@ def test_single_controller_multiple_storages():
             client.initialize_storage_manager(manager_type="SimpleStorage", config=config)
 
             # Mock all storage manager methods to avoid real ZMQ operations
-            async def mock_put_data(data, metadata):
+            async def mock_put_data(data, metadata, data_parser=None):
                 pass  # Just pretend to store the data
 
             async def mock_get_data(metadata):

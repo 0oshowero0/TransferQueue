@@ -17,13 +17,10 @@
 # This implementation is inspired by https://github.com/vllm-project/vllm/blob/main/vllm/v1/serial_utils.py
 
 
-import logging
-import os
 import pickle
 import warnings
 from collections.abc import Sequence
 from contextvars import ContextVar
-from types import FunctionType
 from typing import Any, TypeAlias
 
 import cloudpickle
@@ -32,6 +29,8 @@ import torch
 import zmq
 from msgspec import msgpack
 from tensordict import TensorDictBase
+
+from transfer_queue.utils.logging_utils import get_logger
 
 CUSTOM_TYPE_PICKLE = 1
 CUSTOM_TYPE_CLOUDPICKLE = 2
@@ -44,8 +43,7 @@ _PICKLE_FALLBACK_SENTINEL = b"\xc1\xfe\xed"
 
 bytestr: TypeAlias = bytes | bytearray | memoryview | zmq.Frame
 
-logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
+logger = get_logger(__name__)
 
 # Ignore warnings about non-writable buffers from torch.frombuffer. Upper codes will ensure
 # the tensors are writable to users.
@@ -118,8 +116,9 @@ class MsgpackEncoder:
             # Only true object arrays (or structured dtypes with object fields) reach here
             return msgpack.Ext(CUSTOM_TYPE_PICKLE, pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
 
-        if isinstance(obj, FunctionType):
-            # cloudpickle for functions/methods
+        if callable(obj):
+            # cloudpickle for arbitrary callables (functions, lambdas, functools.partial,
+            # callable class instances, bound methods, etc.)
             return msgpack.Ext(CUSTOM_TYPE_CLOUDPICKLE, cloudpickle.dumps(obj))
 
         # Fallback to pickle for unknown types

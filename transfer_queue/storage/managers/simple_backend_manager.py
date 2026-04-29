@@ -14,15 +14,12 @@
 # limitations under the License.
 
 import asyncio
-import logging
 import os
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping
-from functools import wraps
 from operator import itemgetter
 from typing import Any, Callable, NamedTuple
-from uuid import uuid4
 
 import torch
 import zmq
@@ -32,24 +29,26 @@ from tensordict import NonTensorStack, TensorDict
 from transfer_queue.metadata import BatchMeta, extract_field_schema
 from transfer_queue.storage.managers.base import TransferQueueStorageManager
 from transfer_queue.storage.managers.factory import TransferQueueStorageManagerFactory
+from transfer_queue.utils.logging_utils import get_logger
 from transfer_queue.utils.zmq_utils import (
     ZMQMessage,
     ZMQRequestType,
     ZMQServerInfo,
-    create_zmq_socket,
-    format_zmq_address,
+    with_zmq_socket,
 )
 
-logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
-
-# Ensure logger has a handler
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
-    logger.addHandler(handler)
+logger = get_logger(__name__)
 
 TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT", 200))  # seconds
+
+# Pre-bound decorator for storage-unit socket operations.
+with_storage_unit_socket = with_zmq_socket(
+    "put_get_socket",
+    get_identity=lambda self: self.storage_manager_id,
+    get_peer=lambda self, target: self.storage_unit_infos[target],
+    resolve_target=lambda args, kwargs: kwargs.get("target_storage_unit"),
+    timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT,
+)
 
 
 class RoutingGroup(NamedTuple):
@@ -113,78 +112,6 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             raise ValueError(f"Invalid server infos: {server_infos}")
 
         return server_infos_transform
-
-    # TODO (TQStorage): Provide a general dynamic socket function for both Client & Storage @huazhong.
-    @staticmethod
-    def dynamic_storage_manager_socket(socket_name: str, timeout: int):
-        """Decorator to auto-manage ZMQ sockets for Controller/Storage servers (create -> connect -> inject -> close).
-
-        Args:
-            socket_name (str): Port name (from server config) to use for ZMQ connection (e.g., "data_req_port").
-            timeout (float): Timeout in seconds for ZMQ connection (in seconds).
-
-        Decorated Function Rules:
-            1. Must be an async class method (needs `self`).
-            2. `self` requires:
-            - `storage_unit_infos: storage unit infos (ZMQServerInfo | dict[Any, ZMQServerInfo]).
-            3. Specify target server via:
-            - `target_storage_unit` arg.
-            4. Receives ZMQ socket via `socket` keyword arg (injected by decorator).
-        """
-
-        def decorator(func: Callable):
-            @wraps(func)
-            async def wrapper(self, *args, **kwargs):
-                server_key = kwargs.get("target_storage_unit")
-                if server_key is None:
-                    for arg in args:
-                        if isinstance(arg, str) and arg in self.storage_unit_infos.keys():
-                            server_key = arg
-                            break
-
-                server_info = self.storage_unit_infos.get(server_key)
-
-                if not server_info:
-                    raise RuntimeError(f"Server {server_key} not found in registered servers")
-
-                context = zmq.asyncio.Context()
-                address = format_zmq_address(server_info.ip, server_info.ports.get(socket_name))
-                identity = f"{self.storage_manager_id}_to_{server_info.id}_{uuid4().hex[:8]}".encode()
-                sock = create_zmq_socket(context, zmq.DEALER, server_info.ip, identity)
-
-                try:
-                    sock.connect(address)
-                    # Timeouts to avoid indefinite await on recv/send
-                    sock.setsockopt(zmq.RCVTIMEO, timeout * 1000)
-                    sock.setsockopt(zmq.SNDTIMEO, timeout * 1000)
-                    logger.debug(
-                        f"[{self.storage_manager_id}]: Connected to StorageUnit {server_info.id} at {address} "
-                        f"with identity {identity.decode()}"
-                    )
-
-                    kwargs["socket"] = sock
-                    return await func(self, *args, **kwargs)
-                except Exception as e:
-                    logger.error(
-                        f"[{self.storage_manager_id}]: Error in socket operation with "
-                        f"StorageUnit {server_info.id} at {address}: "
-                        f"{type(e).__name__}: {e}"
-                    )
-                    raise
-                finally:
-                    try:
-                        if not sock.closed:
-                            sock.close(linger=-1)
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self.storage_manager_id}]: Error closing socket to StorageUnit {server_info.id}: {e}"
-                        )
-
-                    context.term()
-
-            return wrapper
-
-        return decorator
 
     def _group_by_hash(self, global_indexes: list[int]) -> dict[str, RoutingGroup]:
         """Group samples by global_idx % num_su, return {storage_id: RoutingGroup}.
@@ -285,7 +212,9 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         else:
             return field_data[positions]
 
-    async def put_data(self, data: TensorDict, metadata: BatchMeta) -> None:
+    async def put_data(
+        self, data: TensorDict, metadata: BatchMeta, data_parser: Callable[[Any], Any] | None = None
+    ) -> None:
         """
         Send data to remote StorageUnit based on metadata.
 
@@ -295,6 +224,15 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
         Args:
             data: TensorDict containing the data to store.
             metadata: BatchMeta containing storage location information.
+            data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                         content. The input is a plain dict (not TensorDict) mapping
+                         field_name -> batched values. For a regular tensor column the
+                         value is a batched tensor; for nested tensors (jagged or strided)
+                         and NonTensorStack columns the values are extracted into a list.
+                         It must modify values in-place based on the original keys; do not
+                         add or remove keys. The number of elements per column must also
+                         remain unchanged. Do not change the inner order of values within
+                         each column. Executed distributedly on each SimpleStorageUnit.
         """
 
         logger.debug(f"[{self.storage_manager_id}]: receive put_data request, putting {metadata.size} samples.")
@@ -312,6 +250,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
                 group.global_indexes,
                 {f: self._select_by_positions(data[f], group.batch_positions) for f in data.keys()},
                 target_storage_unit=su_id,
+                data_parser=data_parser,
             )
             for su_id, group in routing.items()
         ]
@@ -335,12 +274,13 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             field_schema,
         )
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
+    @with_storage_unit_socket
     async def _put_to_single_storage_unit(
         self,
         global_indexes: list[int],
         storage_data: dict[str, Any],
         target_storage_unit: str,
+        data_parser: Callable[[Any], Any] | None = None,
         socket: zmq.Socket = None,
     ):
         """
@@ -351,7 +291,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             request_type=ZMQRequestType.PUT_DATA,  # type: ignore[arg-type]
             sender_id=self.storage_manager_id,
             receiver_id=target_storage_unit,
-            body={"global_indexes": global_indexes, "data": storage_data},
+            body={"global_indexes": global_indexes, "data": storage_data, "data_parser": data_parser},
         )
 
         try:
@@ -470,7 +410,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
 
         return TensorDict(tensor_data, batch_size=len(metadata))
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
+    @with_storage_unit_socket
     async def _get_from_single_storage_unit(
         self,
         global_indexes: list[int],
@@ -542,7 +482,7 @@ class AsyncSimpleStorageManager(TransferQueueStorageManager):
             if isinstance(result, Exception):
                 logger.error(f"[{self.storage_manager_id}]: Error in clear operation task {i}: {result}")
 
-    @dynamic_storage_manager_socket(socket_name="put_get_socket", timeout=TQ_SIMPLE_STORAGE_SEND_RECV_TIMEOUT)
+    @with_storage_unit_socket
     async def _clear_single_storage_unit(self, global_indexes, target_storage_unit=None, socket=None):
         try:
             request_msg = ZMQMessage.create(

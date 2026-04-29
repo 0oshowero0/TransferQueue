@@ -14,12 +14,9 @@
 # limitations under the License.
 
 import asyncio
-import logging
 import os
 import threading
-from functools import wraps
 from typing import Any, Callable, Optional
-from uuid import uuid4
 
 import torch
 import zmq
@@ -34,24 +31,24 @@ from transfer_queue.storage import (
     TransferQueueStorageManagerFactory,
 )
 from transfer_queue.utils.common import limit_pytorch_auto_parallel_threads
+from transfer_queue.utils.logging_utils import get_logger
 from transfer_queue.utils.zmq_utils import (
     ZMQMessage,
     ZMQRequestType,
     ZMQServerInfo,
-    create_zmq_socket,
-    format_zmq_address,
+    with_zmq_socket,
 )
 
-logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("TQ_LOGGING_LEVEL", logging.WARNING))
-
-# Ensure logger has a handler
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
-    logger.addHandler(handler)
+logger = get_logger(__name__)
 
 TQ_NUM_THREADS = int(os.environ.get("TQ_NUM_THREADS", 8))
+
+# Pre-bound decorator for controller socket operations.
+with_controller_socket = with_zmq_socket(
+    "request_handle_socket",
+    get_identity=lambda self: self.client_id,
+    get_peer=lambda self, target: self._controller,
+)
 
 
 class AsyncTransferQueueClient:
@@ -99,63 +96,8 @@ class AsyncTransferQueueClient:
             manager_type, controller_info=self._controller, config=config
         )
 
-    # TODO (TQStorage): Provide a general dynamic socket function for both Client & Storage @huazhong.
-    @staticmethod
-    def dynamic_socket(socket_name: str):
-        """Decorator to auto-manage ZMQ sockets for Controller/Storage servers.
-
-        Handles socket lifecycle: create -> connect -> inject -> close.
-
-        Args:
-            socket_name: Port name from server config to use for ZMQ connection (e.g., "data_req_port")
-
-        Decorated Function Requirements:
-            1. Must be an async class method (needs `self`)
-            2. `self` must have:
-               - `_controller`: Server registry
-               - `client_id`: Unique client ID for socket identity
-            3. Receives ZMQ socket via `socket` keyword argument (injected by decorator)
-        """
-
-        def decorator(func: Callable):
-            @wraps(func)
-            async def wrapper(self, *args, **kwargs):
-                server_info = self._controller
-                if not server_info:
-                    raise RuntimeError("No controller registered")
-
-                context = zmq.asyncio.Context()
-                address = format_zmq_address(server_info.ip, server_info.ports.get(socket_name))
-                identity = f"{self.client_id}_to_{server_info.id}_{uuid4().hex[:8]}".encode()
-                sock = create_zmq_socket(context, zmq.DEALER, identity=identity, ip=server_info.ip)
-
-                try:
-                    sock.connect(address)
-                    logger.debug(
-                        f"[{self.client_id}]: Connected to Controller {server_info.id} at {address} "
-                        f"with identity {identity.decode()}"
-                    )
-
-                    kwargs["socket"] = sock
-                    return await func(self, *args, **kwargs)
-                except Exception as e:
-                    logger.error(f"[{self.client_id}]: Error in socket operation with Controller {server_info.id}: {e}")
-                    raise
-                finally:
-                    try:
-                        if not sock.closed:
-                            sock.close(linger=-1)
-                    except Exception as e:
-                        logger.warning(f"[{self.client_id}]: Error closing socket to Controller {server_info.id}: {e}")
-
-                    context.term()
-
-            return wrapper
-
-        return decorator
-
     # ==================== Basic API ====================
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_get_meta(
         self,
         data_fields: list[str],
@@ -245,7 +187,7 @@ class AsyncTransferQueueClient:
                 f"{response_msg.body.get('message', 'Unknown error')}"
             )
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_set_custom_meta(
         self,
         metadata: BatchMeta,
@@ -324,6 +266,7 @@ class AsyncTransferQueueClient:
         data: TensorDict,
         metadata: Optional[BatchMeta] = None,
         partition_id: Optional[str] = None,
+        data_parser: Optional[Callable[[Any], Any]] = None,
     ) -> BatchMeta:
         """Asynchronously write data to storage units based on metadata.
 
@@ -342,6 +285,16 @@ class AsyncTransferQueueClient:
             metadata: Records the metadata of a batch of data samples, containing index and
                       storage unit information. If None, metadata will be auto-generated.
             partition_id: Target data partition id (required if metadata is not provided)
+            data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                         content. The input is a slice of the `data` parameter, in plain
+                         dict format (not TensorDict), mapping field_name -> batched values.
+                         For a regular tensor column the value is a batched tensor; for
+                         nested tensors (jagged or strided) and NonTensorStack columns
+                         the values are extracted into a list. It must modify values
+                         in-place based on the original keys; do not add or remove keys.
+                         The number of elements per column must also remain unchanged.
+                         Do not change the inner order of values within each column.
+                         Only supported by SimpleStorage.
 
         Returns:
             BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
@@ -411,7 +364,7 @@ class AsyncTransferQueueClient:
         with limit_pytorch_auto_parallel_threads(
             target_num_threads=TQ_NUM_THREADS, info=f"[{self.client_id}] async_put"
         ):
-            await self.storage_manager.put_data(data, metadata)
+            await self.storage_manager.put_data(data, metadata, data_parser=data_parser)
 
         await self.async_set_custom_meta(metadata)
 
@@ -534,7 +487,7 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"Error in clear_samples operation: {str(e)}") from e
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def _clear_meta_in_controller(self, metadata: BatchMeta, socket=None):
         """Clear metadata in the controller.
 
@@ -560,7 +513,7 @@ class AsyncTransferQueueClient:
         if response_msg.request_type != ZMQRequestType.CLEAR_META_RESPONSE:
             raise RuntimeError("Failed to clear samples metadata in controller.")
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def _get_partition_meta(self, partition_id: str, socket=None) -> BatchMeta:
         """Get metadata required for the whole partition from controller.
 
@@ -590,7 +543,7 @@ class AsyncTransferQueueClient:
 
         return response_msg.body["metadata"]
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def _clear_partition_in_controller(self, partition_id, socket=None):
         """Clear the whole partition in the controller.
 
@@ -617,7 +570,7 @@ class AsyncTransferQueueClient:
             raise RuntimeError(f"Failed to clear partition {partition_id} in controller.")
 
     # ==================== Status Query API ====================
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_get_consumption_status(
         self,
         task_name: str,
@@ -680,7 +633,7 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in get_consumption_status: {str(e)}") from e
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_get_production_status(
         self,
         data_fields: list[str],
@@ -812,7 +765,7 @@ class AsyncTransferQueueClient:
             return False
         return torch.all(production_status == 1).item()
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_reset_consumption(
         self,
         partition_id: str,
@@ -874,7 +827,7 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in reset_consumption: {str(e)}") from e
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_get_partition_list(
         self,
         socket: Optional[zmq.asyncio.Socket] = None,
@@ -920,7 +873,7 @@ class AsyncTransferQueueClient:
             raise RuntimeError(f"[{self.client_id}]: Error in get_partition_list: {str(e)}") from e
 
     # ==================== KV Interface API ====================
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_kv_retrieve_meta(
         self,
         keys: list[str] | str,
@@ -986,7 +939,7 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_keys: {str(e)}") from e
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_kv_retrieve_keys(
         self,
         global_indexes: list[int] | int,
@@ -1049,7 +1002,7 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in kv_retrieve_indexes: {str(e)}") from e
 
-    @dynamic_socket(socket_name="request_handle_socket")
+    @with_controller_socket
     async def async_kv_list(
         self,
         partition_id: Optional[str] = None,
@@ -1279,7 +1232,11 @@ class TransferQueueClient(AsyncTransferQueueClient):
         return self._set_custom_meta(metadata=metadata)
 
     def put(
-        self, data: TensorDict, metadata: Optional[BatchMeta] = None, partition_id: Optional[str] = None
+        self,
+        data: TensorDict,
+        metadata: Optional[BatchMeta] = None,
+        partition_id: Optional[str] = None,
+        data_parser: Optional[Callable[[Any], Any]] = None,
     ) -> BatchMeta:
         """Synchronously write data to storage units based on metadata.
 
@@ -1298,6 +1255,16 @@ class TransferQueueClient(AsyncTransferQueueClient):
             metadata: Records the metadata of a batch of data samples, containing index and
                       storage unit information. If None, metadata will be auto-generated.
             partition_id: Target data partition id (required if metadata is not provided)
+            data_parser: Optional callable to parse reference data (e.g., URLs) into real
+                         content. The input is a slice of the `data` parameter, in plain
+                         dict format (not TensorDict), mapping field_name -> batched values.
+                         For a regular tensor column the value is a batched tensor; for
+                         nested tensors (jagged or strided) and NonTensorStack columns
+                         the values are extracted into a list. It must modify values
+                         in-place based on the original keys; do not add or remove keys.
+                         The number of elements per column must also remain unchanged.
+                         Do not change the inner order of values within each column.
+                         Only supported by SimpleStorage.
 
         Returns:
             BatchMeta: The metadata used for the put operation (currently returns the input metadata or auto-retrieved
@@ -1336,7 +1303,7 @@ class TransferQueueClient(AsyncTransferQueueClient):
             >>> # This will create metadata in "insert" mode internally.
             >>> metadata = client.put(data=prompts_repeated_batch, partition_id=current_partition_id)
         """
-        return self._put(data=data, metadata=metadata, partition_id=partition_id)
+        return self._put(data=data, metadata=metadata, partition_id=partition_id, data_parser=data_parser)
 
     def get_data(self, metadata: BatchMeta) -> TensorDict:
         """Synchronously fetch data from storage units and organize into TensorDict.
