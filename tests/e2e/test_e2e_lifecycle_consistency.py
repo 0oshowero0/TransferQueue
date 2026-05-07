@@ -234,15 +234,20 @@ def poll_for_meta(client, partition_id, data_fields, batch_size, task_name, mode
 # Helper Functions for Data Verification
 def verify_special_values(retrieved: torch.Tensor, expected: torch.Tensor) -> bool:
     """Verify special values (NaN, Inf) are preserved."""
-    # Check Inf column
-    if not torch.all(torch.isinf(retrieved[:, 0]) & (retrieved[:, 0] > 0)):
+    r_list = retrieved.unbind(0)
+    e_list = expected.unbind(0)
+    if len(r_list) != len(e_list):
         return False
-    # Check NaN column
-    if not torch.all(torch.isnan(retrieved[:, 1])):
-        return False
-    # Check regular values column
-    if not torch.allclose(retrieved[:, 2], expected[:, 2]):
-        return False
+    for r, e in zip(r_list, e_list, strict=True):
+        # Check Inf column
+        if not (torch.isinf(r[0]) and r[0] > 0):
+            return False
+        # Check NaN column
+        if not torch.isnan(r[1]):
+            return False
+        # Check regular values column
+        if not torch.allclose(r[2], e[2]):
+            return False
     return True
 
 
@@ -293,11 +298,17 @@ def verify_list_equal(retrieved, expected) -> bool:
     if isinstance(retrieved, NonTensorStack):
         retrieved = retrieved.tolist()
     elif isinstance(retrieved, torch.Tensor):
-        retrieved = retrieved.reshape(-1).tolist()  # may get 2D tensor back using key-value based backend
+        if retrieved.is_nested:
+            retrieved = [t.item() for t in retrieved.unbind(0)]
+        else:
+            retrieved = retrieved.reshape(-1).tolist()  # may get 2D tensor back using key-value based backend
     if isinstance(expected, NonTensorStack):
         expected = expected.tolist()
     elif isinstance(expected, torch.Tensor):
-        expected = expected.tolist()
+        if expected.is_nested:
+            expected = [t.item() for t in expected.unbind(0)]
+        else:
+            expected = expected.tolist()
     return retrieved == expected
 
 
@@ -320,11 +331,7 @@ def _reorder_tensordict(td: TensorDict, order: list[int]) -> TensorDict:
         elif hasattr(field, "unbind"):
             items = field.unbind(0)
             reordered_items = [items[i] for i in order]
-            try:
-                reordered[key] = torch.stack(reordered_items)
-            except (RuntimeError, TypeError):
-                # RuntimeError: shape mismatch (jagged); TypeError: non-Tensor items
-                reordered[key] = torch.nested.as_nested_tensor(reordered_items, layout=field.layout)
+            reordered[key] = torch.nested.as_nested_tensor(reordered_items, layout=field.layout)
         elif isinstance(field, list):
             reordered[key] = [field[i] for i in order]
         else:
@@ -365,11 +372,20 @@ def test_core_consistency(e2e_client):
         assert retrieved_meta is not None and retrieved_meta.size == batch_size, "Failed to retrieve metadata"
         retrieved_data = client.get_data(retrieved_meta)
 
-        # 3. Verify Standard Tensors
-        assert torch.allclose(retrieved_data["tensor_f32"], original_data["tensor_f32"]), "tensor_f32 mismatch"
-        assert torch.equal(retrieved_data["tensor_i64"], original_data["tensor_i64"]), "tensor_i64 mismatch"
-        assert torch.equal(retrieved_data["tensor_bf16"], original_data["tensor_bf16"]), "tensor_bf16 mismatch"
-        assert torch.equal(retrieved_data["tensor_f16"], original_data["tensor_f16"]), "tensor_f16 mismatch"
+        # 3. Verify Standard Tensors (may be returned as nested tensors)
+        for i in range(batch_size):
+            assert torch.allclose(retrieved_data["tensor_f32"][i], original_data["tensor_f32"][i]), (
+                f"tensor_f32 mismatch at index {i}"
+            )
+            assert torch.equal(retrieved_data["tensor_i64"][i], original_data["tensor_i64"][i]), (
+                f"tensor_i64 mismatch at index {i}"
+            )
+            assert torch.equal(retrieved_data["tensor_bf16"][i], original_data["tensor_bf16"][i]), (
+                f"tensor_bf16 mismatch at index {i}"
+            )
+            assert torch.equal(retrieved_data["tensor_f16"][i], original_data["tensor_f16"][i]), (
+                f"tensor_f16 mismatch at index {i}"
+            )
 
         # 4. Verify Nested Tensors (Jagged)
         assert verify_nested_tensor_equal(retrieved_data["nested_jagged"], original_data["nested_jagged"]), (
@@ -386,12 +402,17 @@ def test_core_consistency(e2e_client):
         assert verify_list_equal(retrieved_data["list_str"], original_data["list_str"]), "list_str mismatch"
         assert verify_list_equal(retrieved_data["list_obj"], original_data["list_obj"]), "list_obj mismatch"
 
-        # 7. Verify NumPy Arrays
-        assert np.allclose(retrieved_data["np_array"], original_data["np_array"]), "np_array mismatch"
+        # 7. Verify NumPy Arrays (may be returned as nested tensors)
+        for i in range(batch_size):
+            assert np.allclose(retrieved_data["np_array"][i].numpy(), original_data["np_array"][i]), (
+                f"np_array mismatch at index {i}"
+            )
 
         # np_bytes_str: bytes string numpy via CUSTOM_TYPE_NUMPY path
         retrieved_bs = retrieved_data["np_bytes_str"]
-        if hasattr(retrieved_bs, "tolist"):
+        if isinstance(retrieved_bs, torch.Tensor) and retrieved_bs.is_nested:
+            retrieved_bs = [t.item() for t in retrieved_bs.unbind(0)]
+        elif hasattr(retrieved_bs, "tolist"):
             retrieved_bs = retrieved_bs.tolist()
         expected_bs = original_data["np_bytes_str"]
         if hasattr(expected_bs, "tolist") and not isinstance(expected_bs, np.ndarray):
@@ -400,7 +421,9 @@ def test_core_consistency(e2e_client):
 
         # np_obj may be returned as NonTensorStack; normalize to list before comparing
         retrieved_np_obj = retrieved_data["np_obj"]
-        if hasattr(retrieved_np_obj, "tolist"):
+        if isinstance(retrieved_np_obj, torch.Tensor) and retrieved_np_obj.is_nested:
+            retrieved_np_obj = [t.item() for t in retrieved_np_obj.unbind(0)]
+        elif hasattr(retrieved_np_obj, "tolist"):
             retrieved_np_obj = retrieved_np_obj.tolist()
         expected_np_obj = original_data["np_obj"]
         if hasattr(expected_np_obj, "tolist") and not isinstance(expected_np_obj, np.ndarray):
@@ -490,21 +513,24 @@ def test_cross_shard_complex_update(e2e_client):
 
         # 6. Verify region 0-9: original Put A values
         original_data_0_9 = generate_complex_data(list(range(0, 10)))
-        assert torch.allclose(full_data["tensor_f32"][:10], original_data_0_9["tensor_f32"]), (
-            "Region 0-9 tensor_f32 should match original Put A"
-        )
+        for i in range(10):
+            assert torch.allclose(full_data["tensor_f32"][i], original_data_0_9["tensor_f32"][i]), (
+                f"Region 0-9 tensor_f32 mismatch at index {i}"
+            )
 
         # 7. Verify region 10-29: updated values (using offset indices 1010-1029)
         updated_expected = generate_complex_data([i + 1000 for i in range(10, 30)])
-        assert torch.allclose(full_data["tensor_f32"][10:30], updated_expected["tensor_f32"]), (
-            "Region 10-29 tensor_f32 should match updated values"
-        )
+        for i in range(20):
+            assert torch.allclose(full_data["tensor_f32"][10 + i], updated_expected["tensor_f32"][i]), (
+                f"Region 10-29 tensor_f32 mismatch at index {10 + i}"
+            )
 
         # 8. Verify region 30-39: original Put B values
         original_data_30_39 = generate_complex_data(list(range(30, 40)))
-        assert torch.allclose(full_data["tensor_f32"][30:40], original_data_30_39["tensor_f32"]), (
-            "Region 30-39 tensor_f32 should match original Put B"
-        )
+        for i in range(10):
+            assert torch.allclose(full_data["tensor_f32"][30 + i], original_data_30_39["tensor_f32"][i]), (
+                f"Region 30-39 tensor_f32 mismatch at index {30 + i}"
+            )
 
         # 9. Verify new fields exist in update region (indices 10-29 only have new fields).
         # Build extended_meta from full_meta (which has valid _custom_backend_meta)
@@ -760,12 +786,13 @@ def test_dynamic_tensor_shape_nested_transition(e2e_client):
         meta1_put = client.put(data=data1, partition_id=partition_id)
         assert meta1_put.size == 2
 
-        # Poll and verify first batch is regular tensor
+        # Poll and verify first batch (now returned as nested tensor by default)
         meta1 = poll_for_meta(client, partition_id, ["dynamic_feature"], 2, task_name, mode="force_fetch")
         assert not meta1.field_schema["dynamic_feature"]["is_nested"]
         retrieved_1 = client.get_data(meta1)
-        assert not retrieved_1["dynamic_feature"].is_nested
-        assert retrieved_1["dynamic_feature"].shape == (2, 4)
+        assert retrieved_1["dynamic_feature"].is_nested
+        assert len(retrieved_1["dynamic_feature"]) == 2
+        assert retrieved_1["dynamic_feature"][0].shape == (4,)
 
         # 2. Allocate 2 more slots via insert mode, put different-shape tensor (shape: (2, 6))
         alloc_meta2 = client.get_meta(
@@ -802,7 +829,7 @@ def test_retrieved_data_writability_and_memory_safety(e2e_client):
     """Verify that all data types retrieved via GET are writable and memory-independent.
 
     This test validates the ZMQ copy=False GET path (Plan 1):
-    - Tensors (f32, i64, bf16, f16): writable after torch.stack detaches from frame
+    - Tensors (f32, i64, bf16, f16): writable after nested tensor creation
     - Nested tensors (jagged, strided): writable after as_nested_tensor
     - Numpy arrays (float64, bytes string): writable after .copy() in _pack_field_values
     - Modifications to retrieved data do not affect stored data (memory independence)
@@ -861,7 +888,7 @@ def test_retrieved_data_writability_and_memory_safety(e2e_client):
         assert retrieved["special_val"][0, 2].item() == 33333.0, "special_val should be writable"
 
         # 8. np_array: verify it's a tensor now (TensorDict auto-converts numeric numpy)
-        # If it's a tensor, writability is guaranteed by torch.stack
+        # If it's a tensor, writability is guaranteed by nested tensor creation
         np_arr_retrieved = retrieved["np_array"]
         if isinstance(np_arr_retrieved, torch.Tensor):
             np_arr_retrieved[0, 0] = 22222.0
@@ -880,24 +907,28 @@ def test_retrieved_data_writability_and_memory_safety(e2e_client):
         retrieved2 = client.get_data(meta2)
 
         # tensor_f32[0,0] should be the original value, not 99999.0
-        assert torch.allclose(retrieved2["tensor_f32"], original_data["tensor_f32"]), (
-            "Modifying retrieved tensor_f32 should not affect stored data"
-        )
+        for i in range(batch_size):
+            assert torch.allclose(retrieved2["tensor_f32"][i], original_data["tensor_f32"][i]), (
+                "Modifying retrieved tensor_f32 should not affect stored data"
+            )
 
         # tensor_i64[0,0] should be the original value, not 88888
-        assert torch.equal(retrieved2["tensor_i64"], original_data["tensor_i64"]), (
-            "Modifying retrieved tensor_i64 should not affect stored data"
-        )
+        for i in range(batch_size):
+            assert torch.equal(retrieved2["tensor_i64"][i], original_data["tensor_i64"][i]), (
+                "Modifying retrieved tensor_i64 should not affect stored data"
+            )
 
         # tensor_bf16 should match original
-        assert torch.equal(retrieved2["tensor_bf16"], original_data["tensor_bf16"]), (
-            "Modifying retrieved tensor_bf16 should not affect stored data"
-        )
+        for i in range(batch_size):
+            assert torch.equal(retrieved2["tensor_bf16"][i], original_data["tensor_bf16"][i]), (
+                "Modifying retrieved tensor_bf16 should not affect stored data"
+            )
 
         # tensor_f16 should match original
-        assert torch.equal(retrieved2["tensor_f16"], original_data["tensor_f16"]), (
-            "Modifying retrieved tensor_f16 should not affect stored data"
-        )
+        for i in range(batch_size):
+            assert torch.equal(retrieved2["tensor_f16"][i], original_data["tensor_f16"][i]), (
+                "Modifying retrieved tensor_f16 should not affect stored data"
+            )
 
         # nested_jagged should match original
         assert verify_nested_tensor_equal(retrieved2["nested_jagged"], original_data["nested_jagged"]), (

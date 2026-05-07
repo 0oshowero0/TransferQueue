@@ -46,7 +46,7 @@ def get_placement_group(num_ray_actors: int, num_cpus_per_actor: int = 1):
 
 @contextmanager
 def limit_pytorch_auto_parallel_threads(target_num_threads: int | None = None, info: str = ""):
-    """Prevent PyTorch from overdoing the automatic parallelism during torch.stack() operation"""
+    """Prevent PyTorch from overdoing the automatic parallelism during tensor aggregation operations."""
     pytorch_current_num_threads = torch.get_num_threads()
     physical_cores = psutil.cpu_count(logical=False)
     pid = os.getpid()

@@ -30,13 +30,24 @@ def get_meta(data, global_indexes=None):
     # Build columnar field_schema from the data
     field_schema = {}
     for field_name in data.keys():
-        tensor = data[field_name][0]
-        field_schema[field_name] = {
-            "dtype": tensor.dtype if isinstance(tensor, torch.Tensor) else type(tensor),
-            "shape": tensor.shape if isinstance(tensor, torch.Tensor) else None,
-            "is_nested": False,
-            "is_non_tensor": not isinstance(tensor, torch.Tensor),
-        }
+        field_data = data[field_name]
+        if isinstance(field_data, torch.Tensor) and field_data.is_nested:
+            per_sample_shapes = [t.shape for t in field_data.unbind()]
+            field_schema[field_name] = {
+                "dtype": field_data.dtype,
+                "shape": per_sample_shapes[0],
+                "per_sample_shapes": per_sample_shapes,
+                "is_nested": True,
+                "is_non_tensor": False,
+            }
+        else:
+            tensor = field_data[0]
+            field_schema[field_name] = {
+                "dtype": tensor.dtype if isinstance(tensor, torch.Tensor) else type(tensor),
+                "shape": tensor.shape if isinstance(tensor, torch.Tensor) else None,
+                "is_nested": False,
+                "is_non_tensor": not isinstance(tensor, torch.Tensor),
+            }
 
     import numpy as np
 
@@ -64,9 +75,38 @@ def test_data():
 
     data = TensorDict(
         {
-            "text": torch.tensor([[1, 2], [3, 4], [5, 6]]),  # shape: [3, 2]
-            "label": torch.tensor([0, 1, 2]),  # shape: [3]
-            "mask": torch.tensor([[1], [1], [0]]),  # shape: [3, 1]
+            "input_ids": torch.nested.as_nested_tensor(
+                [
+                    torch.tensor([1, 2, 3, 4, 5]),
+                    torch.tensor([6, 7, 8, 9]),
+                    torch.tensor([10, 11]),
+                ],
+                layout=torch.jagged,
+            ),
+            "prompt_ids": torch.nested.as_nested_tensor(
+                [
+                    torch.tensor([1, 2]),
+                    torch.tensor([6, 7, 8]),
+                    torch.tensor([10]),
+                ],
+                layout=torch.jagged,
+            ),
+            "response_ids": torch.nested.as_nested_tensor(
+                [
+                    torch.tensor([3, 4, 5]),
+                    torch.tensor([9]),
+                    torch.tensor([11]),
+                ],
+                layout=torch.jagged,
+            ),
+            "response_mask": torch.nested.as_nested_tensor(
+                [
+                    torch.tensor([0, 0, 1, 1, 1]),
+                    torch.tensor([0, 0, 0, 1]),
+                    torch.tensor([0, 1]),
+                ],
+                layout=torch.jagged,
+            ),
         },
         batch_size=3,
     )
@@ -84,9 +124,22 @@ def test_data():
 def test_generate_keys(test_data):
     """Test whether _generate_keys can generate the correct key list."""
     keys = KVStorageManager._generate_keys(test_data["data"].keys(), test_data["metadata"].global_indexes)
-    expected = ["8@label", "9@label", "10@label", "8@mask", "9@mask", "10@mask", "8@text", "9@text", "10@text"]
+    expected = [
+        "8@input_ids",
+        "9@input_ids",
+        "10@input_ids",
+        "8@prompt_ids",
+        "9@prompt_ids",
+        "10@prompt_ids",
+        "8@response_ids",
+        "9@response_ids",
+        "10@response_ids",
+        "8@response_mask",
+        "9@response_mask",
+        "10@response_mask",
+    ]
     assert keys == expected
-    assert len(keys) == 9  # 3 fields * 3 indexes
+    assert len(keys) == 12  # 4 fields * 3 indexes
 
 
 def test_generate_values(test_data):
@@ -95,8 +148,21 @@ def test_generate_values(test_data):
     using field_name as the primary key and global_index as the secondary key.
     """
     values = KVStorageManager._generate_values(test_data["data"])
-    expected_length = len(test_data["field_names"]) * len(test_data["global_indexes"])  # 9
-    expected_values = [0, 1, 2, [1], [1], [0], [1, 2], [3, 4], [5, 6]]
+    expected_length = len(test_data["field_names"]) * len(test_data["global_indexes"])  # 12
+    expected_values = [
+        [1, 2, 3, 4, 5],
+        [6, 7, 8, 9],
+        [10, 11],  # input_ids
+        [1, 2],
+        [6, 7, 8],
+        [10],  # prompt_ids
+        [3, 4, 5],
+        [9],
+        [11],  # response_ids
+        [0, 0, 1, 1, 1],
+        [0, 0, 0, 1],
+        [0, 1],  # response_mask
+    ]
 
     expected_values = [torch.tensor(value) for value in expected_values]
 
@@ -124,14 +190,15 @@ def test_merge_tensors_to_tensordict(mock_create, test_data):
     reconstructed = manager._merge_tensors_to_tensordict(test_data["metadata"], values)
 
     # Check presence of keys
-    assert "text" in reconstructed
-    assert "label" in reconstructed
-    assert "mask" in reconstructed
+    assert "input_ids" in reconstructed
+    assert "prompt_ids" in reconstructed
+    assert "response_ids" in reconstructed
+    assert "response_mask" in reconstructed
 
-    # Check tensor equality
-    assert torch.equal(reconstructed["text"], test_data["data"]["text"])
-    assert torch.equal(reconstructed["label"], test_data["data"]["label"])
-    assert torch.equal(reconstructed["mask"], test_data["data"]["mask"])
+    # Check tensor equality (nested tensor vs nested tensor)
+    for key in ["input_ids", "prompt_ids", "response_ids", "response_mask"]:
+        for t1, t2 in zip(reconstructed[key].unbind(0), test_data["data"][key].unbind(0), strict=False):
+            assert torch.equal(t1, t2)
 
     # Check batch size
     assert reconstructed.batch_size == torch.Size([3])
@@ -139,7 +206,7 @@ def test_merge_tensors_to_tensordict(mock_create, test_data):
     # verify nested tensors and non tensors
     complex_data = TensorDict(
         {
-            "text": torch.nested.nested_tensor([[1, 2], [3], [4]]),
+            "input_ids": torch.nested.nested_tensor([[1, 2], [3], [4]]),
             "prompt": ["5", "6", "7"],
             "extra": [torch.Tensor([8]), "9", torch.Tensor([10])],
         },
@@ -149,11 +216,11 @@ def test_merge_tensors_to_tensordict(mock_create, test_data):
     complex_meta = get_meta(complex_data)
     complex_values = manager._generate_values(complex_data)
     complex_tensordict = manager._merge_tensors_to_tensordict(complex_meta, complex_values)
-    assert "text" in complex_tensordict
+    assert "input_ids" in complex_tensordict
     assert "prompt" in complex_tensordict
     for key in complex_tensordict.keys():
         if isinstance(complex_tensordict[key], torch.Tensor):
-            for t1, t2 in zip(complex_tensordict[key], complex_data[key], strict=False):
+            for t1, t2 in zip(complex_tensordict[key].unbind(0), complex_data[key].unbind(0), strict=False):
                 assert torch.equal(t1, t2)
         else:
             assert complex_tensordict[key] == complex_data[key]
@@ -167,18 +234,22 @@ def test_get_shape_type_custom_backend_meta_list_without_custom_backend_meta(tes
 
     # Expected order: sorted by field name (label, mask, text), then by global_index order
     # 3 fields * 3 samples = 9 entries
-    # Check shapes - order is label, mask, text (sorted alphabetically)
-    # label shapes: [()]*3, mask shapes: [(1,)]*3, text shapes: [(2,)]*3
+    # Check shapes - order is input_ids, prompt_ids, response_ids, response_mask (sorted alphabetically)
+    # input_ids shapes: [5, 4, 2], prompt_ids shapes: [2, 3, 1],
+    # response_ids shapes: [3, 1, 1], response_mask shapes: [5, 4, 2]
     expected_shapes = [
-        torch.Size([]),  # label[0]
-        torch.Size([]),  # label[1]
-        torch.Size([]),  # label[2]
-        torch.Size([1]),  # mask[0]
-        torch.Size([1]),  # mask[1]
-        torch.Size([1]),  # mask[2]
-        torch.Size([2]),  # text[0]
-        torch.Size([2]),  # text[1]
-        torch.Size([2]),  # text[2]
+        torch.Size([5]),  # input_ids[0]
+        torch.Size([4]),  # input_ids[1]
+        torch.Size([2]),  # input_ids[2]
+        torch.Size([2]),  # prompt_ids[0]
+        torch.Size([3]),  # prompt_ids[1]
+        torch.Size([1]),  # prompt_ids[2]
+        torch.Size([3]),  # response_ids[0]
+        torch.Size([1]),  # response_ids[1]
+        torch.Size([1]),  # response_ids[2]
+        torch.Size([5]),  # response_mask[0]
+        torch.Size([4]),  # response_mask[1]
+        torch.Size([2]),  # response_mask[2]
     ]
     expected_dtypes = [torch.int64] * (len(test_data["field_names"]) * len(test_data["global_indexes"]))
     # No custom_backend_meta provided, so all should be None
@@ -194,24 +265,43 @@ def test_get_shape_type_custom_backend_meta_list_with_custom_backend_meta(test_d
     # Add custom_backend_meta to metadata (columnar: list aligned with global_indexes [8, 9, 10])
     metadata = test_data["metadata"]
     metadata._custom_backend_meta = [
-        {"text": {"key1": "value1"}, "label": {"key2": "value2"}, "mask": {"key3": "value3"}},  # global_index=8
-        {"text": {"key4": "value4"}, "label": {"key5": "value5"}, "mask": {"key6": "value6"}},  # global_index=9
-        {"text": {"key7": "value7"}, "label": {"key8": "value8"}, "mask": {"key9": "value9"}},  # global_index=10
+        {
+            "input_ids": {"key1": "value1"},
+            "prompt_ids": {"key2": "value2"},
+            "response_ids": {"key3": "value3"},
+            "response_mask": {"key4": "value4"},
+        },  # global_index=8
+        {
+            "input_ids": {"key5": "value5"},
+            "prompt_ids": {"key6": "value6"},
+            "response_ids": {"key7": "value7"},
+            "response_mask": {"key8": "value8"},
+        },  # global_index=9
+        {
+            "input_ids": {"key9": "value9"},
+            "prompt_ids": {"key10": "value10"},
+            "response_ids": {"key11": "value11"},
+            "response_mask": {"key12": "value12"},
+        },  # global_index=10
     ]
 
     shapes, dtypes, custom_backend_meta_list = KVStorageManager._get_shape_type_custom_backend_meta_list(metadata)
 
-    # Check custom_backend_meta - order is label, mask, text (sorted alphabetically) by global_index
+    # Check custom_backend_meta - order is input_ids, prompt_ids, response_ids,
+    # response_mask (sorted alphabetically) by global_index
     expected_custom_backend_meta = [
-        {"key2": "value2"},  # label, global_index=8
-        {"key5": "value5"},  # label, global_index=9
-        {"key8": "value8"},  # label, global_index=10
-        {"key3": "value3"},  # mask, global_index=8
-        {"key6": "value6"},  # mask, global_index=9
-        {"key9": "value9"},  # mask, global_index=10
-        {"key1": "value1"},  # text, global_index=8
-        {"key4": "value4"},  # text, global_index=9
-        {"key7": "value7"},  # text, global_index=10
+        {"key1": "value1"},  # input_ids, global_index=8
+        {"key5": "value5"},  # input_ids, global_index=9
+        {"key9": "value9"},  # input_ids, global_index=10
+        {"key2": "value2"},  # prompt_ids, global_index=8
+        {"key6": "value6"},  # prompt_ids, global_index=9
+        {"key10": "value10"},  # prompt_ids, global_index=10
+        {"key3": "value3"},  # response_ids, global_index=8
+        {"key7": "value7"},  # response_ids, global_index=9
+        {"key11": "value11"},  # response_ids, global_index=10
+        {"key4": "value4"},  # response_mask, global_index=8
+        {"key8": "value8"},  # response_mask, global_index=9
+        {"key12": "value12"},  # response_mask, global_index=10
     ]
     assert custom_backend_meta_list == expected_custom_backend_meta
 
@@ -221,24 +311,31 @@ def test_get_shape_type_custom_backend_meta_list_with_partial_custom_backend_met
     # Add custom_backend_meta only for some fields (columnar: list aligned with global_indexes [8, 9, 10])
     metadata = test_data["metadata"]
     metadata._custom_backend_meta = [
-        {"text": {"key1": "value1"}},  # global_index=8: only text field
+        {"input_ids": {"key1": "value1"}},  # global_index=8: only input_ids field
         {},  # global_index=9: no custom_backend_meta
-        {"label": {"key2": "value2"}, "mask": {"key3": "value3"}},  # global_index=10: label and mask only
+        {
+            "prompt_ids": {"key2": "value2"},
+            "response_ids": {"key3": "value3"},
+        },  # global_index=10: prompt_ids and response_ids only
     ]
 
     shapes, dtypes, custom_backend_meta_list = KVStorageManager._get_shape_type_custom_backend_meta_list(metadata)
 
-    # Check custom_backend_meta - order is label, mask, text (sorted alphabetically) by global_index
+    # Check custom_backend_meta - order is input_ids, prompt_ids, response_ids,
+    # response_mask (sorted alphabetically) by global_index
     expected_custom_backend_meta = [
-        None,  # label, global_index=8 (not in custom_backend_meta)
-        None,  # label, global_index=9 (not in custom_backend_meta)
-        {"key2": "value2"},  # label, global_index=10
-        None,  # mask, global_index=8 (not in custom_backend_meta)
-        None,  # mask, global_index=9 (not in custom_backend_meta)
-        {"key3": "value3"},  # mask, global_index=10
-        {"key1": "value1"},  # text, global_index=8
-        None,  # text, global_index=9 (not in custom_backend_meta)
-        None,  # text, global_index=10 (not in custom_backend_meta for text)
+        {"key1": "value1"},  # input_ids, global_index=8
+        None,  # input_ids, global_index=9 (not in custom_backend_meta)
+        None,  # input_ids, global_index=10 (not in custom_backend_meta)
+        None,  # prompt_ids, global_index=8 (not in custom_backend_meta)
+        None,  # prompt_ids, global_index=9 (not in custom_backend_meta)
+        {"key2": "value2"},  # prompt_ids, global_index=10
+        None,  # response_ids, global_index=8 (not in custom_backend_meta)
+        None,  # response_ids, global_index=9 (not in custom_backend_meta)
+        {"key3": "value3"},  # response_ids, global_index=10
+        None,  # response_mask, global_index=8 (not in custom_backend_meta)
+        None,  # response_mask, global_index=9 (not in custom_backend_meta)
+        None,  # response_mask, global_index=10 (not in custom_backend_meta)
     ]
     assert custom_backend_meta_list == expected_custom_backend_meta
 

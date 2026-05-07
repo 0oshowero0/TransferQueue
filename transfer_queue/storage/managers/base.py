@@ -517,8 +517,8 @@ class KVStorageManager(StorageManager):
             1. compute chunk (Each chunk is a slice of the values list
                 and All data in the chunk belong to the same field of tensordict.)
             2. if first or last value of chunk is not tensor, use NonTensorStack
-            3. if the first and the last has the same shape, try torch.stack
-            4. if failed, try as_nested_tensor
+            3. try as_nested_tensor (jagged layout)
+            4. if failed, try as_nested_tensor (strided layout)
             5. if failed, finally use NonTensorStack
 
             note: we use first value and last value to Estimate the situation of the entire chunk.
@@ -532,16 +532,13 @@ class KVStorageManager(StorageManager):
             if not (isinstance(first_value, torch.Tensor) and isinstance(last_value, torch.Tensor)):
                 return field, NonTensorStack(*chunk)
 
-            if first_value.shape == last_value.shape:
-                try:
-                    return field, torch.stack(chunk)
-                except (RuntimeError, TypeError):
-                    pass
-
             try:
                 return field, torch.nested.as_nested_tensor(chunk, layout=torch.jagged)
             except (RuntimeError, TypeError):
-                return field, NonTensorStack(*chunk)
+                try:
+                    return field, torch.nested.as_nested_tensor(chunk, layout=torch.strided)
+                except (RuntimeError, TypeError):
+                    return field, NonTensorStack(*chunk)
 
         executor = self._get_executor()
         use_multi_threads = num_fields > 1 and executor is not None

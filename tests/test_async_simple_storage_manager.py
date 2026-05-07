@@ -537,13 +537,12 @@ class TestSelectByPositions:
 class TestPackFieldValues:
     """Test _pack_field_values static method packing logic."""
 
-    def test_uniform_tensors_to_stack(self):
-        """Same-shape tensors → torch.stack."""
+    def test_uniform_tensors_to_nested(self):
+        """Same-shape tensors → nested tensor (default)."""
         values = [torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])]
         result = AsyncSimpleStorageManager._pack_field_values(values)  # type: ignore[attr-defined]
         assert isinstance(result, torch.Tensor)
-        assert not result.is_nested
-        assert result.shape == (2, 2)
+        assert result.is_nested
 
     def test_variable_length_tensors_to_nested(self):
         """Different-shape tensors → nested tensor."""
@@ -560,7 +559,7 @@ class TestPackFieldValues:
         assert result.tolist() == ["hello", "world"]
 
     def test_mixed_tensors_and_none_to_nontensorstack(self):
-        """Mixed tensor + None values should stay as NonTensorStack (no stacking)."""
+        """Mixed tensor + None values should stay as NonTensorStack (no nested tensor)."""
         t0 = torch.tensor([1.0, 2.0])
         t2 = torch.tensor([3.0, 4.0])
         values = [t0, None, t2]
