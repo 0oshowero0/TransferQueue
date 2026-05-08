@@ -207,7 +207,7 @@
    "source": [
     "# Retrieve a single key (pass a string)\n",
     "result = tq.kv_batch_get(keys=\"sample_0\", partition_id=\"train\")\n",
-    "print(\"sample_0 \u2192\", result)\n",
+    "print(\"sample_0 →\", result)\n",
     "print(\"input_ids:\", result[\"input_ids\"])"
    ],
    "outputs": [
@@ -215,7 +215,7 @@
      "name": "stdout",
      "output_type": "stream",
      "text": [
-      "sample_0 \u2192 TensorDict(\n",
+      "sample_0 → TensorDict(\n",
       "    fields={\n",
       "        input_ids: NestedTensor(shape=torch.Size([1, j1]), device=cpu, dtype=torch.int64, is_shared=False)},\n",
       "    batch_size=torch.Size([1]),\n",
@@ -233,7 +233,7 @@
    "source": [
     "# Retrieve multiple keys at once\n",
     "result = tq.kv_batch_get(keys=keys, partition_id=\"train\")\n",
-    "print(\"batch result \u2192\", result)\n",
+    "print(\"batch result →\", result)\n",
     "print(\"input_ids:\\n\", result[\"input_ids\"])\n",
     "print(\"attention_mask:\\n\", result[\"attention_mask\"])"
    ],
@@ -242,7 +242,7 @@
      "name": "stdout",
      "output_type": "stream",
      "text": [
-      "batch result \u2192 TensorDict(\n",
+      "batch result → TensorDict(\n",
       "    fields={\n",
       "        attention_mask: NestedTensor(shape=torch.Size([3, j2]), device=cpu, dtype=torch.int64, is_shared=False),\n",
       "        input_ids: NestedTensor(shape=torch.Size([3, j3]), device=cpu, dtype=torch.int64, is_shared=False)},\n",
@@ -669,7 +669,7 @@
     "        reconstructed.append(img)\n",
     "        offset += numel\n",
     "\n",
-    "    print(f\"Sample {i}: {num_images} image(s) \u2192 {[tuple(img.shape) for img in reconstructed]}\")\n",
+    "    print(f\"Sample {i}: {num_images} image(s) → {[tuple(img.shape) for img in reconstructed]}\")\n",
     "\n",
     "# Clean up\n",
     "tq.kv_clear(keys=image_keys, partition_id=\"train\")"
@@ -679,9 +679,9 @@
      "name": "stdout",
      "output_type": "stream",
      "text": [
-      "Sample 0: 2 image(s) \u2192 [(3, 32, 32), (3, 64, 64)]\n",
-      "Sample 1: 1 image(s) \u2192 [(3, 48, 48)]\n",
-      "Sample 2: 3 image(s) \u2192 [(3, 16, 16), (3, 24, 24), (3, 32, 64)]\n"
+      "Sample 0: 2 image(s) → [(3, 32, 32), (3, 64, 64)]\n",
+      "Sample 1: 1 image(s) → [(3, 48, 48)]\n",
+      "Sample 2: 3 image(s) → [(3, 16, 16), (3, 24, 24), (3, 32, 64)]\n"
      ]
     }
    ],
@@ -984,7 +984,7 @@
     "    tag={\"split\": \"val\"},\n",
     ")\n",
     "\n",
-    "all_info = tq.kv_list()  # no partition_id \u2192 list everything\n",
+    "all_info = tq.kv_list()  # no partition_id → list everything\n",
     "print(\"All partitions:\", list(all_info.keys()))"
    ],
    "outputs": [
