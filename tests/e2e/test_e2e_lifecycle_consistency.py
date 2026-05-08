@@ -234,11 +234,9 @@ def poll_for_meta(client, partition_id, data_fields, batch_size, task_name, mode
 # Helper Functions for Data Verification
 def verify_special_values(retrieved: torch.Tensor, expected: torch.Tensor) -> bool:
     """Verify special values (NaN, Inf) are preserved."""
-    r_list = retrieved.unbind(0)
-    e_list = expected.unbind(0)
-    if len(r_list) != len(e_list):
+    if len(retrieved) != len(expected):
         return False
-    for r, e in zip(r_list, e_list, strict=True):
+    for r, e in zip(retrieved, expected, strict=True):
         # Check Inf column
         if not (torch.isinf(r[0]) and r[0] > 0):
             return False
@@ -299,14 +297,14 @@ def verify_list_equal(retrieved, expected) -> bool:
         retrieved = retrieved.tolist()
     elif isinstance(retrieved, torch.Tensor):
         if retrieved.is_nested:
-            retrieved = [t.item() for t in retrieved.unbind(0)]
+            retrieved = [t.item() for t in retrieved]
         else:
             retrieved = retrieved.reshape(-1).tolist()  # may get 2D tensor back using key-value based backend
     if isinstance(expected, NonTensorStack):
         expected = expected.tolist()
     elif isinstance(expected, torch.Tensor):
         if expected.is_nested:
-            expected = [t.item() for t in expected.unbind(0)]
+            expected = [t.item() for t in expected]
         else:
             expected = expected.tolist()
     return retrieved == expected
@@ -328,8 +326,8 @@ def _reorder_tensordict(td: TensorDict, order: list[int]) -> TensorDict:
             items = field.tolist()
             reordered_items = [items[i] for i in order]
             reordered[key] = NonTensorStack(*reordered_items, batch_size=[len(order)])
-        elif hasattr(field, "unbind"):
-            items = field.unbind(0)
+        elif isinstance(field, torch.Tensor) and field.is_nested:
+            items = list(field)
             reordered_items = [items[i] for i in order]
             reordered[key] = torch.nested.as_nested_tensor(reordered_items, layout=field.layout)
         elif isinstance(field, list):
@@ -411,7 +409,7 @@ def test_core_consistency(e2e_client):
         # np_bytes_str: bytes string numpy via CUSTOM_TYPE_NUMPY path
         retrieved_bs = retrieved_data["np_bytes_str"]
         if isinstance(retrieved_bs, torch.Tensor) and retrieved_bs.is_nested:
-            retrieved_bs = [t.item() for t in retrieved_bs.unbind(0)]
+            retrieved_bs = [t.item() for t in retrieved_bs]
         elif hasattr(retrieved_bs, "tolist"):
             retrieved_bs = retrieved_bs.tolist()
         expected_bs = original_data["np_bytes_str"]
@@ -422,7 +420,7 @@ def test_core_consistency(e2e_client):
         # np_obj may be returned as NonTensorStack; normalize to list before comparing
         retrieved_np_obj = retrieved_data["np_obj"]
         if isinstance(retrieved_np_obj, torch.Tensor) and retrieved_np_obj.is_nested:
-            retrieved_np_obj = [t.item() for t in retrieved_np_obj.unbind(0)]
+            retrieved_np_obj = [t.item() for t in retrieved_np_obj]
         elif hasattr(retrieved_np_obj, "tolist"):
             retrieved_np_obj = retrieved_np_obj.tolist()
         expected_np_obj = original_data["np_obj"]

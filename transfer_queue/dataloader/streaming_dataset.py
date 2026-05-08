@@ -16,8 +16,9 @@
 import os
 import time
 import uuid
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
+import torch
 from omegaconf import DictConfig
 from tensordict import TensorDict
 from torch.utils.data import IterableDataset
@@ -332,10 +333,33 @@ def chunk_batch_fn(td, batch_meta, micro_batch_size=1):
     splits = []
     batch_meta_list = batch_meta.chunk(num_splits)
 
+    # Pre-process: separate nested tensors so that native ``td[start:end]`` works.
+    # TensorDict delegates slice to each field; nested tensors do not support
+    # slice on dim=0. By unbinding nested fields once upfront and slicing the
+    # dense TensorDict natively, we avoid per-field try/except overhead.
+    nested_fields: dict[str, tuple[tuple, torch.layout]] = {}
+    dense_data: dict[str, Any] = {}
+    for key, value in td.items():
+        if isinstance(value, torch.Tensor) and value.is_nested:
+            nested_fields[key] = (value.unbind(0), value.layout)
+        else:
+            dense_data[key] = value
+
+    dense_td = TensorDict(dense_data, batch_size=td.batch_size) if dense_data else None
+
     # Chunk the TensorDict and pair with corresponding metadata chunks
     for i in range(num_splits):
         start = i * micro_batch_size
         end = min(start + micro_batch_size, total_size)
-        splits.append((td[start:end], batch_meta_list[i]))
+
+        if dense_td is not None:
+            chunk_td = dense_td[start:end]
+        else:
+            chunk_td = TensorDict({}, batch_size=(end - start,))
+
+        for key, (tensors, layout) in nested_fields.items():
+            chunk_td[key] = torch.nested.as_nested_tensor(tensors[start:end], layout=layout)
+
+        splits.append((chunk_td, batch_meta_list[i]))
 
     return splits

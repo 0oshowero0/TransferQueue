@@ -197,7 +197,10 @@ def test_merge_tensors_to_tensordict(mock_create, test_data):
 
     # Check tensor equality (nested tensor vs nested tensor)
     for key in ["input_ids", "prompt_ids", "response_ids", "response_mask"]:
-        for t1, t2 in zip(reconstructed[key].unbind(0), test_data["data"][key].unbind(0), strict=False):
+        unbound_a = reconstructed[key].unbind(0)
+        unbound_b = test_data["data"][key].unbind(0)
+        assert len(unbound_a) == len(unbound_b), f"Length mismatch for {key}: {len(unbound_a)} vs {len(unbound_b)}"
+        for t1, t2 in zip(unbound_a, unbound_b, strict=True):
             assert torch.equal(t1, t2)
 
     # Check batch size
@@ -220,7 +223,10 @@ def test_merge_tensors_to_tensordict(mock_create, test_data):
     assert "prompt" in complex_tensordict
     for key in complex_tensordict.keys():
         if isinstance(complex_tensordict[key], torch.Tensor):
-            for t1, t2 in zip(complex_tensordict[key].unbind(0), complex_data[key].unbind(0), strict=False):
+            unbound_a = complex_tensordict[key].unbind(0)
+            unbound_b = complex_data[key].unbind(0)
+            assert len(unbound_a) == len(unbound_b), f"Length mismatch for {key}: {len(unbound_a)} vs {len(unbound_b)}"
+            for t1, t2 in zip(unbound_a, unbound_b, strict=True):
                 assert torch.equal(t1, t2)
         else:
             assert complex_tensordict[key] == complex_data[key]

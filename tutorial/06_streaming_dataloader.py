@@ -219,7 +219,7 @@ def update_worker(
 
     for batch, batch_meta in dataloader:
         # Extract sample IDs from the batch
-        ids = batch["meta_idx"].view(-1).tolist()
+        ids = [t.item() for t in batch["meta_idx"]]
 
         print(f"[Update Worker@{rank_id}]: dp_rank {dp_rank} retrieved samples: {ids}")
         consumed_ids.extend(ids)

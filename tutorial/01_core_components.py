@@ -107,8 +107,11 @@ def demonstrate_data_workflow():
 
     # Step 4: Verify
     print("[Step 4] Verifying data integrity...")
-    assert torch.equal(retrieved_data["input_ids"], input_ids)
-    assert torch.equal(retrieved_data["attention_mask"], attention_mask)
+    # Nested tensors do not support torch.equal directly; compare per-sample.
+    for key in ["input_ids", "attention_mask"]:
+        expected = input_ids if key == "input_ids" else attention_mask
+        for t1, t2 in zip(retrieved_data[key], expected, strict=True):
+            assert torch.equal(t1, t2), f"Mismatch in {key}"
     print("  ✓ Data matches original!")
 
     # Step 5: Clear
