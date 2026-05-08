@@ -534,7 +534,7 @@ class KVStorageManager(StorageManager):
 
             # Scalar tensors cannot be represented as jagged nested tensors;
             # stack them densely to avoid noisy fallback warnings.
-            if all(v.dim() == 0 for v in chunk):
+            if all(isinstance(v, torch.Tensor) for v in chunk) and all(v.dim() == 0 for v in chunk):
                 return field, torch.stack(chunk)
 
             try:
