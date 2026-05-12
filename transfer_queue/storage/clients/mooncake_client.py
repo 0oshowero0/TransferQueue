@@ -213,7 +213,9 @@ class MooncakeStoreClient(StorageKVClient):
 
         serialized_values = [pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL) for v in batch_values]
 
-        # FIXME: Use element-level ret value to precise retransmit when MooncakeStore supports
+        # FIXME: When MooncakeStore supports per-key status codes for upsert_batch and get_batch,
+        #        switch the bytes write/read paths from whole-batch retry to per-key selective retry,
+        #        matching the tensor-path behaviour.
         ret = self._store.upsert_batch(batch_keys, serialized_values, self.replica_config)
         if ret == 0:
             return
