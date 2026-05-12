@@ -150,23 +150,94 @@ class MooncakeStoreClient(StorageKVClient):
 
         try:
             results = self._store.batch_upsert_from(batch_keys, batch_ptrs, batch_sizes, config=self.replica_config)
-            if not all(r == 0 for r in results):
-                failed_indices = [j for j, r in enumerate(results) if r != 0]
-                error_codes = [results[j] for j in failed_indices]
-                raise RuntimeError(
-                    f"batch_upsert_from failed for indices {failed_indices} with error codes: {error_codes}"
+            if len(results) != len(batch_keys):
+                raise RuntimeError(f"batch_upsert_from returned {len(results)} results, expected {len(batch_keys)}")
+
+            failed_indices = [j for j, r in enumerate(results) if r != 0]
+            if not failed_indices:
+                return
+
+            current_failed_keys = [batch_keys[i] for i in failed_indices]
+            current_failed_codes = [results[i] for i in failed_indices]
+            current_failed_indices = failed_indices
+
+            logger.error(
+                f"batch_upsert_from failed for keys {current_failed_keys} with error codes {current_failed_codes}. "
+                f"Retrying up to {MAX_RETRIES} times..."
+            )
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                retry_ptrs = [batch_ptrs[i] for i in current_failed_indices]
+                retry_sizes = [batch_sizes[i] for i in current_failed_indices]
+
+                retry_results = self._store.batch_upsert_from(
+                    current_failed_keys, retry_ptrs, retry_sizes, config=self.replica_config
                 )
+
+                next_failed_indices = []
+                next_failed_keys = []
+                next_failed_codes = []
+
+                for i, ret in enumerate(retry_results):
+                    if ret != 0:
+                        next_failed_indices.append(current_failed_indices[i])
+                        next_failed_keys.append(current_failed_keys[i])
+                        next_failed_codes.append(ret)
+
+                if not next_failed_indices:
+                    logger.info("batch_upsert_from succeeded after retransmission.")
+                    break  # All retries in this attempt succeeded.
+
+                logger.error(
+                    f"batch_upsert_from retry {attempt}/{MAX_RETRIES} failed for {len(next_failed_keys)} keys "
+                    f"with error codes {next_failed_codes}."
+                )
+
+                current_failed_indices = next_failed_indices
+                current_failed_keys = next_failed_keys
+                current_failed_codes = next_failed_codes
+
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                raise RuntimeError(
+                    f"batch_upsert_from failed for keys {current_failed_keys} with error codes "
+                    f"{current_failed_codes} after retrying {MAX_RETRIES} times."
+                )
+
         finally:
             self._unregister_all_buffers(batch_ptr_reduced)
 
     def _put_bytes_thread_worker(self, batch_keys: list[str], batch_values: list[Any]):
         """Worker thread for putting batch of non-tensors to MooncakeStore."""
 
-        batch_values = [pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL) for v in batch_values]
+        serialized_values = [pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL) for v in batch_values]
 
-        ret = self._store.upsert_batch(batch_keys, batch_values, self.replica_config)
-        if ret != 0:
-            raise RuntimeError(f"upsert_batch failed with error code: {ret}")
+        # FIXME: Use element-level ret value to precise retransmit when MooncakeStore supports
+        ret = self._store.upsert_batch(batch_keys, serialized_values, self.replica_config)
+        if ret == 0:
+            return
+
+        logger.error(
+            f"upsert_batch failed for {len(batch_keys)} keys with error code: {ret}. "
+            f"Retrying up to {MAX_RETRIES} times..."
+        )
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            ret = self._store.upsert_batch(batch_keys, serialized_values, self.replica_config)
+            if ret == 0:
+                logger.info("upsert_batch succeeded after retransmission.")
+                return
+
+            logger.error(
+                f"upsert_batch retry {attempt}/{MAX_RETRIES} failed for {len(batch_keys)} keys with error code: {ret}."
+            )
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY_SECONDS)
+
+        raise RuntimeError(
+            f"upsert_batch failed for {len(batch_keys)} keys with error code: {ret} after retrying {MAX_RETRIES} times."
+        )
 
     def get(
         self,
@@ -274,7 +345,13 @@ class MooncakeStoreClient(StorageKVClient):
                         next_failed_codes.append(ret)
 
                 if not next_failed_indices:
+                    logger.info("batch_get_into succeeded after retransmission.")
                     break  # All retries in this attempt succeeded.
+
+                logger.error(
+                    f"batch_get_into retry {attempt}/{MAX_RETRIES} failed for {len(next_failed_keys)} keys "
+                    f"with error codes {next_failed_codes}."
+                )
 
                 # Narrow down to still-failed items for the next retry attempt.
                 current_failed_indices = next_failed_indices
@@ -300,7 +377,7 @@ class MooncakeStoreClient(StorageKVClient):
         if len(raw_results) != len(batch_keys):
             raise RuntimeError(f"get_batch returned {len(raw_results)} items, expected {len(batch_keys)}")
 
-        # TODO: Use MooncakeStore provided ret codes to detect transmission failures when supported
+        # FIXME: Use MooncakeStore provided ret codes to detect transmission failures when supported
         # Currently we rely on empty bytes (b'') to detect transmission failures because
         # MooncakeStore does not currently return a separate status code per key.
         failed_indices = [i for i, result in enumerate(raw_results) if result == b""]
@@ -326,7 +403,10 @@ class MooncakeStoreClient(StorageKVClient):
                         raw_results[original_idx] = result
 
                 if not next_failed_indices:
+                    logger.info("get_batch succeeded after retransmission.")
                     break  # All retries in this attempt succeeded.
+
+                logger.error(f"get_batch retry {attempt}/{MAX_RETRIES} failed for {len(next_failed_keys)} keys.")
 
                 # Narrow down to still-failed items for the next retry attempt.
                 current_failed_keys = next_failed_keys
@@ -336,10 +416,8 @@ class MooncakeStoreClient(StorageKVClient):
                     time.sleep(RETRY_DELAY_SECONDS)
             else:
                 # All retries exhausted.
-                # FIXME: raise error here when we can distinguish transmission failures from empty values
-                logger.error(
-                    f"get_batch failed for keys {current_failed_keys} after retrying {MAX_RETRIES} times. "
-                    f"Please validate if the values corresponding to these keys are `None` during put."
+                raise RuntimeError(
+                    f"get_batch failed for keys {current_failed_keys} after retrying {MAX_RETRIES} times."
                 )
 
         deserialized_results = [pickle.loads(result) if result != b"" else None for result in raw_results]
