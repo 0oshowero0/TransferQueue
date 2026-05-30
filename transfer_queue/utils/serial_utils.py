@@ -459,8 +459,7 @@ def batch_encode_into(
             the corresponding buffer list. ``buffers[i]`` must be an
             ``np.ndarray`` or ``memoryview`` holding at least ``sizes[i]``
             bytes.
-        num_workers: Thread count for parallel packing. Default 1 (serial);
-            set ``>1`` only when the upper layer is single-threaded.
+        num_workers: Thread count for parallel packing. Default 1 (serial).
 
     Returns:
         tuple[list[np.ndarray | memoryview], list[int]]: The buffers returned by

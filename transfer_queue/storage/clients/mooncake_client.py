@@ -109,7 +109,7 @@ class MooncakeStoreClient(StorageKVClient):
         Returns:
             Per-key metadata aligned with ``keys``. Tensor entries are ``None``;
             non-tensor entries carry ``{"packed_size": int}`` so the get-side
-            can pre-allocate the receiver buffer.
+            can pre-allocate the receive buffer.
         """
 
         if not isinstance(keys, list) or not isinstance(values, list):
@@ -216,7 +216,7 @@ class MooncakeStoreClient(StorageKVClient):
             shapes: Expected tensor shapes (use [] for scalars).
             dtypes: Expected dtypes; use None for non-tensor data.
             custom_backend_meta: Per-key dicts; non-tensor entries must carry
-                ``{"packed_size": int}`` so the receiver buffer can be sized.
+                ``{"packed_size": int}`` so the receive buffer can be sized.
 
         Returns:
             Retrieved values in the same order as input keys.
@@ -409,7 +409,7 @@ class MooncakeStoreClient(StorageKVClient):
     ) -> None:
         """Run ``batch_get_into`` with per-key retry; raise on permanent failure.
 
-        Caller owns the receiver buffers (allocate/register/unregister).
+        Caller owns the receive buffers (allocate/register/unregister).
         """
         ret_codes = self._store.batch_get_into(batch_keys, batch_buffer_ptrs, batch_nbytes)
         if len(ret_codes) != len(batch_keys):
