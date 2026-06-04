@@ -1050,7 +1050,7 @@ class TransferQueueController:
 
     def get_partition_snapshot(self, partition_id: str) -> DataPartitionStatus | None:
         """
-        Get a copy of partition status information, without threading.Lock().
+        Get a copy of partition status information.
 
         Args:
             partition_id: ID of the partition to retrieve
@@ -1815,6 +1815,7 @@ class TransferQueueController:
                     response_msg = ZMQMessage.create(
                         request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ACK,
                         sender_id=self.controller_id,
+                        receiver_id=request_msg.sender_id,
                         body={
                             "controller_id": self.controller_id,
                             "partition_id": partition_id,
