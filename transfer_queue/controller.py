@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import groupby
 from operator import itemgetter
-from threading import Lock, Thread
+from threading import Thread
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -361,10 +361,6 @@ class DataPartitionStatus:
     keys_mapping: dict[str, int] = field(default_factory=dict)  # key -> global_idx
     revert_keys_mapping: dict[int, str] = field(default_factory=dict)  # global_idx -> key
 
-    # Threading lock for concurrency control; only for preventing mask operation error when expanding production_status.
-    # No need to strictly lock for every read/write operation since freshness is not critical.
-    data_status_lock: Lock = field(default_factory=Lock)
-
     # Dynamic configuration - these are computed from the current state
     @property
     def total_samples_num(self) -> int:
@@ -409,8 +405,7 @@ class DataPartitionStatus:
         max_sample_idx = max(allocated_indexes)
         required_samples = max_sample_idx + 1
 
-        with self.data_status_lock:
-            self.ensure_samples_capacity(required_samples)
+        self.ensure_samples_capacity(required_samples)
 
         logger.debug(f"Pre-allocated indexes in {self.partition_id}: {allocated_indexes}")
 
@@ -526,9 +521,8 @@ class DataPartitionStatus:
             max_sample_idx = max(global_indices) if global_indices else -1
             required_samples = max_sample_idx + 1
 
-            with self.data_status_lock:
-                # Ensure we have enough rows
-                self.ensure_samples_capacity(required_samples)
+            # Ensure we have enough rows
+            self.ensure_samples_capacity(required_samples)
 
             # Register new fields if needed
             new_fields = [f for f in field_names if f not in self.field_name_mapping]
@@ -538,14 +532,12 @@ class DataPartitionStatus:
                     self.field_name_mapping[f] = len(self.field_name_mapping)
 
                 required_fields = len(self.field_name_mapping)
-                with self.data_status_lock:
-                    self.ensure_fields_capacity(required_fields)
+                self.ensure_fields_capacity(required_fields)
 
-            with self.data_status_lock:
-                # Update production status
-                if self.production_status is not None and global_indices and field_names:
-                    field_indices = [self.field_name_mapping.get(f) for f in field_names]
-                    self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = 1
+            # Update production status
+            if self.production_status is not None and global_indices and field_names:
+                field_indices = [self.field_name_mapping.get(f) for f in field_names]
+                self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = 1
 
             # Update field metadata
             self._update_field_metadata(global_indices, field_schema, custom_backend_meta)
@@ -641,8 +633,7 @@ class DataPartitionStatus:
             if partition_global_index.numel() == 0:
                 empty_status = self.consumption_status[task_name].new_zeros(0)
                 return partition_global_index, empty_status
-            with self.data_status_lock:
-                self.ensure_samples_capacity(max(partition_global_index) + 1)
+            self.ensure_samples_capacity(max(partition_global_index) + 1)
             consumption_status = self.consumption_status[task_name][partition_global_index]
         else:
             consumption_status = self.consumption_status[task_name]
@@ -730,23 +721,22 @@ class DataPartitionStatus:
             if field_name not in self.field_name_mapping:
                 return []
 
-        with self.data_status_lock:
-            row_mask = torch.ones(self.allocated_samples_num, dtype=torch.bool)
+        row_mask = torch.ones(self.allocated_samples_num, dtype=torch.bool)
 
-            # Apply consumption filter (exclude already consumed samples)
-            _, consumption_status = self.get_consumption_status(task_name, mask=False)
-            if consumption_status is not None:
-                unconsumed_mask = consumption_status == 0
-                row_mask &= unconsumed_mask
+        # Apply consumption filter (exclude already consumed samples)
+        _, consumption_status = self.get_consumption_status(task_name, mask=False)
+        if consumption_status is not None:
+            unconsumed_mask = consumption_status == 0
+            row_mask &= unconsumed_mask
 
-            # Create column mask for requested fields
-            col_mask = torch.zeros(self.allocated_fields_num, dtype=torch.bool)
-            field_indices = [self.field_name_mapping[field] for field in field_names]
-            if field_indices:
-                col_mask[field_indices] = True
+        # Create column mask for requested fields
+        col_mask = torch.zeros(self.allocated_fields_num, dtype=torch.bool)
+        field_indices = [self.field_name_mapping[field] for field in field_names]
+        if field_indices:
+            col_mask[field_indices] = True
 
-            # Filter production status by masks
-            relevant_status = self.production_status[row_mask][:, col_mask]
+        # Filter production status by masks
+        relevant_status = self.production_status[row_mask][:, col_mask]
 
         # Check if all required fields are ready for each sample
         all_fields_ready = torch.all(relevant_status, dim=1)
@@ -886,9 +876,6 @@ class DataPartitionStatus:
             snapshot = cls.__new__(cls)
 
             for name, value in self.__dict__.items():
-                if name == "data_status_lock":
-                    continue
-
                 if isinstance(value, Tensor):
                     new_val = value.clone().detach()
                 else:
@@ -897,13 +884,7 @@ class DataPartitionStatus:
                 setattr(snapshot, name, new_val)
             return snapshot
 
-        lock_obj = getattr(self, "data_status_lock", None)
-
-        if lock_obj:
-            with lock_obj:
-                return _perform_copy()
-        else:
-            return _perform_copy()
+        return _perform_copy()
 
     def clear_data(self, indexes_to_release: list[int], clear_consumption: bool = True):
         """Clear all production and optionally consumption data for given global_indexes."""
@@ -1021,7 +1002,6 @@ class TransferQueueController:
 
         # Start background processing threads
         self._start_process_handshake()
-        self._start_process_update_data_status()
         self._start_process_request()
 
         logger.info(f"TransferQueue Controller {self.controller_id} initialized")
@@ -1623,8 +1603,7 @@ class TransferQueueController:
                     partition.keys_mapping[keys[none_indexes[i]]] = batch_global_indexes[i]
                     partition.revert_keys_mapping[batch_global_indexes[i]] = keys[none_indexes[i]]
 
-                with partition.data_status_lock:
-                    partition.ensure_samples_capacity(max(batch_global_indexes) + 1)
+                partition.ensure_samples_capacity(max(batch_global_indexes) + 1)
 
         verified_global_indexes = [idx for idx in global_indexes if idx is not None]
         assert len(verified_global_indexes) == len(keys)
@@ -1685,7 +1664,6 @@ class TransferQueueController:
             try:
                 self._handshake_socket_port = get_free_port(ip=self._node_ip)
                 self._request_handle_socket_port = get_free_port(ip=self._node_ip)
-                self._data_status_update_socket_port = get_free_port(ip=self._node_ip)
 
                 self.handshake_socket = create_zmq_socket(
                     ctx=self.zmq_context,
@@ -1701,15 +1679,6 @@ class TransferQueueController:
                 )
                 self.request_handle_socket.bind(format_zmq_address(self._node_ip, self._request_handle_socket_port))
 
-                self.data_status_update_socket = create_zmq_socket(
-                    ctx=self.zmq_context,
-                    socket_type=zmq.ROUTER,
-                    ip=self._node_ip,
-                )
-                self.data_status_update_socket.bind(
-                    format_zmq_address(self._node_ip, self._data_status_update_socket_port)
-                )
-
                 break
             except zmq.ZMQError:
                 logger.warning(f"[{self.controller_id}]: Try to bind ZMQ sockets failed, retrying...")
@@ -1722,7 +1691,6 @@ class TransferQueueController:
             ports={
                 "handshake_socket": self._handshake_socket_port,
                 "request_handle_socket": self._request_handle_socket_port,
-                "data_status_update_socket": self._data_status_update_socket_port,
             },
         )
 
@@ -1781,15 +1749,6 @@ class TransferQueueController:
         )
         self.wait_connection_thread.start()
 
-    def _start_process_update_data_status(self):
-        """Start the data status update processing thread."""
-        self.process_update_data_status_thread = Thread(
-            target=self._update_data_status,
-            name="TransferQueueControllerProcessUpdateDataStatusThread",
-            daemon=True,
-        )
-        self.process_update_data_status_thread.start()
-
     def _start_process_request(self):
         """Start the request processing thread."""
         self.process_request_thread = Thread(
@@ -1832,6 +1791,35 @@ class TransferQueueController:
                         sender_id=self.controller_id,
                         receiver_id=request_msg.sender_id,
                         body={"metadata": metadata},
+                    )
+
+            elif request_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE:
+                with monitor.measure(op_type="NOTIFY_DATA_UPDATE"):
+                    message_data = request_msg.body
+                    partition_id = message_data.get("partition_id")
+                    global_indexes = message_data.get("global_indexes", [])
+
+                    # Update production status
+                    success = self.update_production_status(
+                        partition_id=partition_id,
+                        global_indexes=global_indexes,
+                        field_schema=message_data.get("field_schema", {}),
+                        custom_backend_meta=message_data.get("custom_backend_meta", {}),
+                    )
+                    if success:
+                        if self._metrics is not None:
+                            self._metrics.record_samples("NOTIFY_DATA_UPDATE", len(global_indexes))
+                        logger.debug(f"[{self.controller_id}]: Updated production status for partition {partition_id}")
+
+                    # Send acknowledgment
+                    response_msg = ZMQMessage.create(
+                        request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ACK,
+                        sender_id=self.controller_id,
+                        body={
+                            "controller_id": self.controller_id,
+                            "partition_id": partition_id,
+                            "success": success,
+                        },
                     )
 
             elif request_msg.request_type == ZMQRequestType.GET_PARTITION_META:
@@ -2046,50 +2034,6 @@ class TransferQueueController:
                     )
 
             self.request_handle_socket.send_multipart([identity, *response_msg.serialize()])
-
-    def _update_data_status(self):
-        """Process data status update messages from storage units - adapted for partitions."""
-        logger.debug(f"[{self.controller_id}]: start receiving update_data_status requests...")
-
-        perf_monitor = IntervalPerfMonitor(caller_name=self.controller_id)
-
-        while True:
-            monitor = self._metrics if self._metrics is not None else perf_monitor
-
-            messages = self.data_status_update_socket.recv_multipart(copy=False)
-            identity = messages.pop(0)
-            serialized_msg = messages
-            request_msg = ZMQMessage.deserialize(serialized_msg)
-
-            if request_msg.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE:
-                with monitor.measure(op_type="NOTIFY_DATA_UPDATE"):
-                    message_data = request_msg.body
-                    partition_id = message_data.get("partition_id")
-                    global_indexes = message_data.get("global_indexes", [])
-
-                    # Update production status
-                    success = self.update_production_status(
-                        partition_id=partition_id,
-                        global_indexes=global_indexes,
-                        field_schema=message_data.get("field_schema", {}),
-                        custom_backend_meta=message_data.get("custom_backend_meta", {}),
-                    )
-                    if success:
-                        if self._metrics is not None:
-                            self._metrics.record_samples("NOTIFY_DATA_UPDATE", len(global_indexes))
-                        logger.debug(f"[{self.controller_id}]: Updated production status for partition {partition_id}")
-
-                    # Send acknowledgment
-                    response_msg = ZMQMessage.create(
-                        request_type=ZMQRequestType.NOTIFY_DATA_UPDATE_ACK,
-                        sender_id=self.controller_id,
-                        body={
-                            "controller_id": self.controller_id,
-                            "partition_id": partition_id,
-                            "success": success,
-                        },
-                    )
-                    self.data_status_update_socket.send_multipart([identity, *response_msg.serialize()])
 
     def get_zmq_server_info(self) -> ZMQServerInfo:
         """Get ZMQ server connection information."""
