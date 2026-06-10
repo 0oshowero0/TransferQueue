@@ -31,7 +31,7 @@ TransferQueue offers **fine-grained, sub-sample-level** data management and **lo
 
 <h2 id="updates">🔄 Updates</h2>
 
- - **June 10, 2026**: 🔥 TransferQueue has been adopted in [UniRL](https://github.com/Tencent-Hunyuan/UniRL), a unified RL framework for multimodal models developed by Tencent Hunyuan.
+ - **June 9, 2026**: 🔥 TransferQueue has been adopted in [UniRL](https://github.com/Tencent-Hunyuan/UniRL), a unified RL framework for multimodal models developed by Tencent Hunyuan.
  - **April 15, 2026**: 🔥 TransferQueue has been adopted in [Relax](https://github.com/redai-infra/Relax)! By leveraging the `StreamingDataLoader` abstraction, it schedules training data across the cluster at micro-batch granularity, reducing synchronization barriers in a single-controller setup.
  - **April 10, 2026**: 🔥 TransferQueue is now officially integrated into [verl](https://github.com/verl-project/verl/pull/5401)! <span style="color: #FF0000;">**We achieved an end-to-end performance gain of 49.1% for multi-modal post-training on a 128 × H100 GPU cluster!**</span> Refer to [our blog](https://www.yuque.com/haomingzi-lfse7/lhp4el/gm8mkpfu83luuhxg?singleDoc#) for more details.
  - **Feb 8, 2026**: 🔥 Initialization and usage are greatly simplified by high-level APIs [PR#26](https://github.com/Ascend/TransferQueue/pull/26), [PR#28](https://github.com/Ascend/TransferQueue/pull/28). You can now use a Redis-style API to take advantage of most of the advanced features provided by TransferQueue!
