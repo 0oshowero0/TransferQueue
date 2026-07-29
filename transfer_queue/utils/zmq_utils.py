@@ -45,6 +45,9 @@ class ZMQRequestType(ExplicitEnum):
     HANDSHAKE = "HANDSHAKE"  # TransferQueueStorageUnit -> TransferQueueController
     HANDSHAKE_ACK = "HANDSHAKE_ACK"  # TransferQueueController  -> TransferQueueStorageUnit
 
+    # GENERIC
+    REQUEST_ERROR = "REQUEST_ERROR"  # TransferQueueController -> requester, when a request cannot be served
+
     # DATA_OPERATION
     GET_DATA = "GET"
     PUT_DATA = "PUT"

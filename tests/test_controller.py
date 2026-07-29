@@ -1269,11 +1269,13 @@ class TestTransferQueueControllerCheckpoint:
 
 
 class TestTransferQueueControllerBadRequests:
-    """The request loop must survive requests it cannot decode or does not handle.
+    """The request loop must survive requests it cannot decode, does not handle, or fails on.
 
-    Either kind used to propagate out of ``_process_request``, killing
+    Any of these used to propagate out of ``_process_request``, killing
     ``TransferQueueControllerProcessRequestThread``. The controller then stopped answering
     anything at all for the rest of the run, so one malformed message took down the job.
+    Every bad request must now get a REQUEST_ERROR reply: requesters block on recv until a
+    reply arrives, so silently dropping a request would hang the caller instead.
     """
 
     RECV_TIMEOUT_MS = 5000
@@ -1314,6 +1316,9 @@ class TestTransferQueueControllerBadRequests:
             # Frame 0 must be the msgpack header; prepending an empty frame shifts every
             # boundary by one, which is exactly the corruption seen in production.
             sock.send_multipart([b"", *self._list_partitions_request()])
+            reply = ZMQMessage.deserialize(sock.recv_multipart(copy=False))
+            assert reply.request_type == ZMQRequestType.REQUEST_ERROR
+            assert "undecodable" in reply.body["message"]
 
             self._assert_still_serving(sock)
             print("✓ controller still serving after an undecodable request")
@@ -1322,11 +1327,12 @@ class TestTransferQueueControllerBadRequests:
                 sock.close(linger=0)
             ctx.term()
 
-    def test_controller_drops_unhandled_request_type(self, ray_setup):
+    def test_controller_rejects_unhandled_request_type(self, ray_setup):
         """PUT_DATA is a storage-unit request; the controller has no branch for it.
 
         Without the guard, the reply carried whatever response the previous loop iteration
         had left in ``response_msg``, so this probe received a stale LIST_PARTITIONS_RESPONSE.
+        Now the requester gets a REQUEST_ERROR it can react to instead of a stale reply.
         """
         tq_controller = TransferQueueController.remote()
         ctx = zmq.Context()
@@ -1343,11 +1349,42 @@ class TestTransferQueueControllerBadRequests:
                     body={},
                 ).serialize()
             )
-            with pytest.raises(zmq.error.Again):
-                sock.recv_multipart(copy=False)
+            reply = ZMQMessage.deserialize(sock.recv_multipart(copy=False))
+            assert reply.request_type == ZMQRequestType.REQUEST_ERROR
+            assert "no handler" in reply.body["message"]
 
             self._assert_still_serving(sock)
-            print("✓ controller dropped an unhandled request type without replaying a stale response")
+            print("✓ controller rejected an unhandled request type without replaying a stale response")
+        finally:
+            if sock is not None and not sock.closed:
+                sock.close(linger=0)
+            ctx.term()
+
+    def test_controller_replies_error_when_handler_raises(self, ray_setup):
+        """A GET_META body missing its keys makes the handler raise KeyError.
+
+        The exception used to kill the request thread, hanging every client. Now the
+        requester gets a REQUEST_ERROR and the loop keeps serving subsequent requests.
+        """
+        tq_controller = TransferQueueController.remote()
+        ctx = zmq.Context()
+        sock = None
+        try:
+            sock = self._connect(ctx, tq_controller)
+
+            sock.send_multipart(
+                ZMQMessage.create(
+                    request_type=ZMQRequestType.GET_META,
+                    sender_id="probe",
+                    body={},  # no data_fields/batch_size/partition_id -> KeyError in the handler
+                ).serialize()
+            )
+            reply = ZMQMessage.deserialize(sock.recv_multipart(copy=False))
+            assert reply.request_type == ZMQRequestType.REQUEST_ERROR
+            assert "GET_META failed" in reply.body["message"]
+
+            self._assert_still_serving(sock)
+            print("✓ controller replied with an error when the handler raised")
         finally:
             if sock is not None and not sock.closed:
                 sock.close(linger=0)

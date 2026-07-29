@@ -403,7 +403,7 @@ def encode(obj: Any) -> list[bytestr]:
     try:
         return list(_encoder.encode(obj))
     except _ENCODE_FALLBACK_ERRORS as e:
-        logger.debug(
+        logger.warning(
             "encode: msgpack failed (%s), falling back to pickle.",
             type(e).__name__,
         )
