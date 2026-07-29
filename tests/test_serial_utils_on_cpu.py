@@ -17,9 +17,17 @@
 import numpy as np
 import pytest
 import torch
+import zmq
 from tensordict import TensorDict
 
-from transfer_queue.utils.serial_utils import MsgpackDecoder, MsgpackEncoder
+from transfer_queue.utils.serial_utils import (
+    _PICKLE_FALLBACK_SENTINEL,
+    MsgpackDecoder,
+    MsgpackEncoder,
+    _is_pickle_fallback,
+    decode,
+    encode,
+)
 
 
 @pytest.mark.parametrize(
@@ -1087,3 +1095,138 @@ class TestNumpySerialization:
         deserialized = decoder.decode(serialized)
         assert isinstance(deserialized, np.ndarray)
         assert np.array_equal(deserialized, arr)
+
+
+# ============================================================================
+# Whole-Message Pickle Fallback Tests
+# ============================================================================
+class TestPickleFallback:
+    """Tests for the whole-message pickle fallback shared by ``encode`` and ``decode``.
+
+    Two independent defects made this path unusable end to end:
+
+    1. ``encode`` only caught ``TypeError``/``ValueError``, but msgspec reports
+       unrepresentable values with ``OverflowError``, ``RecursionError`` and its own
+       ``MsgspecError`` — none of which derive from ``ValueError`` — so the fallback was
+       skipped and the exception escaped to the caller.
+    2. ``decode`` located the marker frame with ``frames[0] == _PICKLE_FALLBACK_SENTINEL``.
+       Every receiver calls ``recv_multipart(copy=False)`` and therefore holds
+       ``zmq.Frame`` objects, which define no ``__eq__`` against ``bytes``, so the
+       comparison was always False and the marker was handed to msgpack instead.
+    """
+
+    @staticmethod
+    def _as_received(frames):
+        """Rebuild frames the way ``recv_multipart(copy=False)`` delivers them."""
+        return [zmq.Frame(memoryview(frame).tobytes()) for frame in frames]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(2**70, id="above_uint64_max"),
+            pytest.param(-(2**70), id="below_int64_min"),
+        ],
+    )
+    def test_oversized_int_falls_back_instead_of_raising(self, value):
+        """msgspec raises OverflowError here, which is an ArithmeticError, not a ValueError."""
+        obj = {"global_step": 7, "offset": value}
+
+        frames = encode(obj)
+
+        assert len(frames) == 2, "expected the two-frame pickle fallback layout"
+        assert bytes(frames[0]) == _PICKLE_FALLBACK_SENTINEL
+        assert decode(frames) == obj
+
+    def test_self_referential_container_falls_back(self):
+        """msgspec raises RecursionError on cycles; pickle memoizes them."""
+        obj = {"name": "cyclic"}
+        obj["self"] = obj
+
+        frames = encode(obj)
+
+        assert len(frames) == 2
+        decoded = decode(frames)
+        assert decoded["name"] == "cyclic"
+        assert decoded["self"] is decoded, "pickle should restore the cycle"
+
+    def test_fallback_round_trips_through_zmq_frames(self):
+        """The core regression: the marker must still be recognised inside a zmq.Frame."""
+        obj = {"offset": 2**70, "indexes": torch.arange(8)}
+
+        frames = self._as_received(encode(obj))
+        decoded = decode(frames)
+
+        assert decoded["offset"] == 2**70
+        assert torch.equal(decoded["indexes"], obj["indexes"])
+
+    @pytest.mark.parametrize(
+        "wrap",
+        [
+            pytest.param(bytes, id="bytes"),
+            pytest.param(bytearray, id="bytearray"),
+            pytest.param(memoryview, id="memoryview"),
+            pytest.param(zmq.Frame, id="zmq_frame"),
+        ],
+    )
+    def test_marker_detected_for_every_buffer_type(self, wrap):
+        """Senders emit bytes; receivers hold zmq.Frame. Both must be recognised."""
+        assert _is_pickle_fallback(wrap(_PICKLE_FALLBACK_SENTINEL))
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param(b"", id="empty"),
+            pytest.param(b"\xa2ab", id="same_size_msgpack_str"),
+            pytest.param(b"\xc1\xfe", id="truncated_marker"),
+            pytest.param(b"\xc1\xfe\xed\x00", id="marker_plus_trailing_byte"),
+        ],
+    )
+    def test_non_marker_frames_are_not_mistaken_for_fallback(self, payload):
+        """A msgpack header frame that merely resembles the marker must not divert decode."""
+        assert not _is_pickle_fallback(payload)
+        assert not _is_pickle_fallback(zmq.Frame(payload))
+
+    def test_zmq_message_fallback_survives_a_real_socket(self):
+        """End-to-end over the transport that hid the bug: ROUTER + recv_multipart(copy=False)."""
+        from transfer_queue.utils.zmq_utils import (
+            ZMQMessage,
+            ZMQRequestType,
+            create_zmq_socket,
+            format_zmq_address,
+            get_free_port,
+        )
+
+        ip = "127.0.0.1"
+        ctx = zmq.Context()
+        router = dealer = None
+        try:
+            port = get_free_port(ip)
+            router = create_zmq_socket(ctx, zmq.ROUTER, ip)
+            router.bind(format_zmq_address(ip, port))
+            dealer = create_zmq_socket(ctx, zmq.DEALER, ip, identity=b"fallback-probe")
+            dealer.connect(format_zmq_address(ip, port))
+
+            # 2**70 has no msgpack representation, so this message takes the pickle path.
+            msg = ZMQMessage.create(
+                request_type=ZMQRequestType.NOTIFY_DATA_UPDATE,
+                sender_id="storage-1",
+                body={"partition_id": "p0", "offset": 2**70},
+            )
+            sent = msg.serialize()
+            assert len(sent) == 2, "expected the pickle fallback layout"
+            dealer.send_multipart(sent)
+
+            assert router.poll(10_000), "message never arrived"
+            frames = router.recv_multipart(copy=False)
+            frames.pop(0)  # ROUTER identity prefix, as the controller does
+
+            received = ZMQMessage.deserialize(frames)
+            assert received.sender_id == "storage-1"
+            assert received.request_type == ZMQRequestType.NOTIFY_DATA_UPDATE
+            assert received.body["offset"] == 2**70
+            assert received.body["partition_id"] == "p0"
+        finally:
+            for sock in (dealer, router):
+                if sock is not None and not sock.closed:
+                    sock.close(linger=0)
+            ctx.term()

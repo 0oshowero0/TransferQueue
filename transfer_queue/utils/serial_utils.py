@@ -26,6 +26,7 @@ from contextvars import ContextVar
 from typing import Any, TypeAlias
 
 import cloudpickle
+import msgspec
 import numpy as np
 import torch
 import zmq
@@ -42,6 +43,7 @@ CUSTOM_TYPE_NUMPY = 5  # For numpy ndarray with buffer reference
 
 # 0xC1 is permanently reserved (invalid) in msgpack spec — safe to use as pickle fallback sentinel.
 _PICKLE_FALLBACK_SENTINEL = b"\xc1\xfe\xed"
+_PICKLE_FALLBACK_SENTINEL_SIZE = len(_PICKLE_FALLBACK_SENTINEL)
 
 bytestr: TypeAlias = bytes | bytearray | memoryview | zmq.Frame
 
@@ -364,6 +366,34 @@ _encoder = MsgpackEncoder()
 _decoder = MsgpackDecoder()
 
 
+# Values msgpack cannot represent. None of these derive from ValueError: OverflowError is
+# an ArithmeticError, RecursionError a RuntimeError, and msgspec's own errors subclass
+# Exception directly. pickle handles all of them (arbitrary-precision ints,
+# self-referential containers, ...), so they are degradation paths rather than failures.
+_ENCODE_FALLBACK_ERRORS = (
+    TypeError,
+    ValueError,
+    OverflowError,
+    RecursionError,
+    msgspec.MsgspecError,
+)
+
+
+def _is_pickle_fallback(frame: bytestr) -> bool:
+    """Whether ``frame`` is the pickle fallback marker.
+
+    Compares buffer contents rather than using ``==``: every receiver calls
+    ``recv_multipart(copy=False)`` and so holds ``zmq.Frame`` objects, which do not
+    implement ``__eq__`` against ``bytes``. Testing the size first keeps the msgpack
+    path copy-free.
+    """
+    try:
+        view = memoryview(frame)
+    except TypeError:
+        return False
+    return view.nbytes == _PICKLE_FALLBACK_SENTINEL_SIZE and view.tobytes() == _PICKLE_FALLBACK_SENTINEL
+
+
 def encode(obj: Any) -> list[bytestr]:
     """Encode an object via msgpack zero-copy; falls back to pickle on failure.
 
@@ -372,7 +402,7 @@ def encode(obj: Any) -> list[bytestr]:
     """
     try:
         return list(_encoder.encode(obj))
-    except (TypeError, ValueError) as e:
+    except _ENCODE_FALLBACK_ERRORS as e:
         logger.debug(
             "encode: msgpack failed (%s), falling back to pickle.",
             type(e).__name__,
@@ -386,7 +416,7 @@ def decode(frames: list) -> Any:
     Transparently handles both the msgpack zero-copy path and the pickle
     fallback path based on the leading sentinel frame.
     """
-    if len(frames) >= 2 and frames[0] == _PICKLE_FALLBACK_SENTINEL:
+    if len(frames) >= 2 and _is_pickle_fallback(frames[0]):
         return pickle.loads(frames[1])
     return _decoder.decode(frames)
 
