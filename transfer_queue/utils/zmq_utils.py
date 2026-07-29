@@ -15,6 +15,7 @@
 
 import socket
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, TypeAlias
@@ -140,6 +141,31 @@ class ZMQServerInfo:
         return f"ZMQSocketInfo(role={self.role}, id={self.id}, ip={self.ip}, ports={self.ports})"
 
 
+class ZMQMessageDecodeError(ValueError):
+    """Raised when a received multipart message cannot be decoded into a ZMQMessage."""
+
+
+def frame_nbytes(frame: Any) -> int | None:
+    """Byte length of a single ZMQ frame, or None if the object exposes no buffer."""
+    try:
+        return memoryview(frame).nbytes
+    except TypeError:
+        return None
+
+
+def describe_frames(frames: Sequence[Any], max_reported: int = 32) -> str:
+    """Summarize a multipart message's frame layout: frame count and per-frame byte sizes.
+
+    ``encode()`` emits a fixed layout (msgpack header in frame 0, one buffer per
+    tensor/ndarray after it), so the frame count and sizes are what distinguish a
+    genuinely corrupt payload from shifted multipart boundaries.
+    """
+    sizes = [frame_nbytes(frame) for frame in frames[:max_reported]]
+    shown = ", ".join("?" if size is None else str(size) for size in sizes)
+    ellipsis = ", ..." if len(frames) > max_reported else ""
+    return f"num_frames={len(frames)}, frame_sizes=[{shown}{ellipsis}]"
+
+
 @dataclass
 class ZMQMessage:
     """
@@ -189,7 +215,18 @@ class ZMQMessage:
         if not frames:
             raise ValueError("Empty frames received")
 
-        result = decode(frames)
+        # Frame 0 is always the msgpack header; buffers for tensors/ndarrays follow it. A
+        # zero-length frame 0 therefore means the multipart boundaries have shifted rather
+        # than that the payload itself is bad, and decoding it would only report a
+        # misleading msgpack error. Report the frame layout instead.
+        if frame_nbytes(frames[0]) == 0:
+            raise ZMQMessageDecodeError(f"leading frame is empty; {describe_frames(frames)}")
+
+        try:
+            result = decode(frames)
+        except Exception as e:
+            raise ZMQMessageDecodeError(f"{type(e).__name__}: {e}; {describe_frames(frames)}") from e
+
         return cls(
             request_type=ZMQRequestType(result["request_type"]),
             sender_id=result["sender_id"],

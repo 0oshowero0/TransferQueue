@@ -10,3 +10,8 @@ repos:
     rev: 'v1.17.0'
     hooks:
       - id: mypy
+        # Check the whole package: with `follow_imports = "skip"` in pyproject.toml,
+        # passing only changed files makes types from other modules (e.g. ExplicitEnum)
+        # unresolved and produces false errors.
+        pass_filenames: false
+        args: [transfer_queue]

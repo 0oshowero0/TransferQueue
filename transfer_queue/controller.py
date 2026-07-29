@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from itertools import groupby
 from operator import itemgetter
 from threading import Thread
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import numpy as np
@@ -1782,11 +1782,34 @@ class TransferQueueController:
         self.process_request_thread.start()
 
     def _process_request(self):
-        """Main request processing loop - adapted for partition-based operations."""
+        """Keep the request loop running for the controller's lifetime.
+
+        Anything that escapes the per-request guards below would otherwise terminate this
+        thread and leave the controller permanently unable to answer requests. The ROUTER
+        socket stays bound across a restart, so the loop simply resumes with the next
+        queued request.
+        """
 
         logger.info(f"[{self.controller_id}]: start processing requests...")
 
         perf_monitor = IntervalPerfMonitor(caller_name=self.controller_id)
+
+        while True:
+            try:
+                self._process_request_loop(perf_monitor)
+            except zmq.ContextTerminated:
+                logger.info(f"[{self.controller_id}]: stopped processing requests (context terminated)")
+                return
+            except Exception as e:
+                if self.request_handle_socket.closed:
+                    logger.info(f"[{self.controller_id}]: stopped processing requests (socket closed)")
+                    return
+                logger.exception(f"[{self.controller_id}]: request loop raised {type(e).__name__}: {e}; restarting")
+                # Keep a persistent failure from turning into a busy log flood.
+                time.sleep(0.1)
+
+    def _process_request_loop(self, perf_monitor: IntervalPerfMonitor) -> None:
+        """Main request processing loop - adapted for partition-based operations."""
 
         while True:
             monitor = self._metrics if self._metrics is not None else perf_monitor
@@ -1794,7 +1817,20 @@ class TransferQueueController:
             messages = self.request_handle_socket.recv_multipart(copy=False)
             identity = messages.pop(0)
             serialized_msg = messages
-            request_msg = ZMQMessage.deserialize(serialized_msg)
+            try:
+                request_msg = ZMQMessage.deserialize(serialized_msg)
+            except Exception as e:
+                # An undecodable request says nothing about the controller's own state, so
+                # drop it and carry on. ZMQMessageDecodeError carries the frame layout,
+                # which is what tells a corrupt payload apart from shifted frame
+                # boundaries.
+                logger.error(
+                    f"[{self.controller_id}]: dropping undecodable request from "
+                    f"identity={bytes(identity)!r}: {type(e).__name__}: {e}"
+                )
+                continue
+
+            response_msg = None
 
             if request_msg.request_type == ZMQRequestType.GET_META:
                 with monitor.measure(op_type="GET_META"):
@@ -1824,7 +1860,7 @@ class TransferQueueController:
 
                     # Update production status
                     success = self.update_production_status(
-                        partition_id=partition_id,
+                        partition_id=cast(str, partition_id),
                         global_indexes=global_indexes,
                         field_schema=message_data.get("field_schema", {}),
                         custom_backend_meta=message_data.get("custom_backend_meta", {}),
@@ -2076,6 +2112,15 @@ class TransferQueueController:
                     receiver_id=request_msg.sender_id,
                     body={"success": True},
                 )
+
+            if response_msg is None:
+                # No branch matched. Without this guard the reply below would send the
+                # previous iteration's response to an unrelated requester.
+                logger.error(
+                    f"[{self.controller_id}]: no handler for request_type={request_msg.request_type} "
+                    f"from sender={request_msg.sender_id}; dropping request {request_msg.request_id}"
+                )
+                continue
 
             self.request_handle_socket.send_multipart([identity, *response_msg.serialize()])
 
