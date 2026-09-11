@@ -185,6 +185,62 @@ class TQMetricsExporter:
             "tq_storage_memory_rss_bytes", "Storage unit process RSS memory", ["storage_unit_id"], registry=r
         )
 
+        # ---- Storage-unit request-loss diagnostics ----
+        # Read against tq_storage_request_ops, which advances only on completion: a gap
+        # between the two is requests arriving and not finishing.
+        self.storage_requests_arrived = Gauge(
+            "tq_storage_requests_arrived",
+            "Requests decoded by the storage unit worker, whether or not they completed",
+            ["storage_unit_id"],
+            registry=r,
+        )
+        self.storage_arrivals_by_op = Gauge(
+            "tq_storage_arrivals_by_op",
+            "Requests decoded by the storage unit worker, by operation",
+            ["storage_unit_id", "op_type"],
+            registry=r,
+        )
+
+        # ---- Accept-queue probe (only populated when TQ_ACCEPT_PROBE_INTERVAL > 0) ----
+        self.storage_accept_queue_backlog = Gauge(
+            "tq_storage_accept_queue_backlog",
+            "Configured accept-queue depth of the storage unit's listening socket",
+            ["storage_unit_id"],
+            registry=r,
+        )
+        self.storage_accept_queue_peak = Gauge(
+            "tq_storage_accept_queue_peak",
+            "Deepest accept-queue occupancy seen by the probe",
+            ["storage_unit_id"],
+            registry=r,
+        )
+        self.storage_accept_queue_peak_utilization = Gauge(
+            "tq_storage_accept_queue_peak_utilization_ratio",
+            "Peak accept-queue occupancy as a fraction of the backlog",
+            ["storage_unit_id"],
+            registry=r,
+        )
+        self.storage_socket_drops = Gauge(
+            "tq_storage_socket_drops",
+            "Connections dropped on this listening socket since the probe started",
+            ["storage_unit_id"],
+            registry=r,
+        )
+        # Split because sk_drops covers several establishment failures, not only a full
+        # queue; the difference is what says whether a bigger backlog would have helped.
+        self.storage_listen_overflows = Gauge(
+            "tq_storage_listen_overflows",
+            "Namespace-wide accept-queue overflows since the probe started",
+            ["storage_unit_id"],
+            registry=r,
+        )
+        self.storage_listen_other_drops = Gauge(
+            "tq_storage_listen_other_drops",
+            "Namespace-wide establishment drops that were not accept-queue overflows",
+            ["storage_unit_id"],
+            registry=r,
+        )
+
         # ---- Storage request metrics (collected via ZMQ, exposed as gauges) ----
         # P50/P99 are pre-computed on the storage unit side and sent via ZMQ,
         # avoiding the need to replicate histogram bucket structures (which
@@ -361,6 +417,30 @@ class TQMetricsExporter:
                             pass
                 self.storage_active_keys.labels(storage_unit_id=label).set(active)
                 self.storage_memory_rss.labels(storage_unit_id=label).set(metrics.get("process_rss_bytes", 0))
+
+                self.storage_requests_arrived.labels(storage_unit_id=label).set(metrics.get("requests_arrived", 0))
+                for op_type, arrived in (metrics.get("arrivals_by_op") or {}).items():
+                    self.storage_arrivals_by_op.labels(storage_unit_id=label, op_type=op_type).set(arrived)
+
+                # Drop the series rather than report zero when the probe is off, so a
+                # disabled probe is not read as "measured, and no drops".
+                accept_queue = metrics.get("accept_queue")
+                accept_gauges = (
+                    (self.storage_accept_queue_backlog, "backlog"),
+                    (self.storage_accept_queue_peak, "peak_recv_q"),
+                    (self.storage_accept_queue_peak_utilization, "peak_utilization"),
+                    (self.storage_socket_drops, "sk_drops_delta"),
+                    (self.storage_listen_overflows, "listen_overflow_delta"),
+                    (self.storage_listen_other_drops, "non_overflow_drop_delta"),
+                )
+                for gauge, key in accept_gauges:
+                    if accept_queue is None:
+                        try:
+                            gauge.remove(label)
+                        except (KeyError, ValueError):
+                            pass
+                    else:
+                        gauge.labels(storage_unit_id=label).set(accept_queue.get(key, 0))
 
                 # Per-operation request stats
                 for op_type, op_data in metrics.get("op_stats", {}).items():

@@ -98,6 +98,14 @@ class TestMetricDefinitions:
             "tq_storage_active_keys_total",
             "tq_storage_utilization_ratio",
             "tq_storage_memory_rss_bytes",
+            "tq_storage_requests_arrived",
+            "tq_storage_arrivals_by_op",
+            "tq_storage_accept_queue_backlog",
+            "tq_storage_accept_queue_peak",
+            "tq_storage_accept_queue_peak_utilization_ratio",
+            "tq_storage_socket_drops",
+            "tq_storage_listen_overflows",
+            "tq_storage_listen_other_drops",
         ]
 
         registered = {m.name for m in exporter.registry.collect()}
@@ -314,6 +322,76 @@ class TestStorageMetricsCollection:
         assert exporter.storage_active_keys.labels(storage_unit_id="SU_001")._value.get() == 250
         assert exporter.storage_utilization.labels(storage_unit_id="SU_001")._value.get() == 0.25
         assert exporter.storage_memory_rss.labels(storage_unit_id="SU_001")._value.get() == 512 * 1024 * 1024
+
+    def test_arrival_counters_are_exported(self):
+        """Arrival counts reach Prometheus, so a dashboard can compare them with completions."""
+        exporter = TQMetricsExporter()
+        fake_su_info = MagicMock()
+        fake_su_info.id = "SU_001"
+        exporter._storage_unit_infos = {"SU_001": fake_su_info}
+        exporter._query_storage_unit = MagicMock(
+            return_value={
+                "storage_unit_id": "SU_001",
+                "capacity": 1000,
+                "active_keys": 1,
+                "requests_arrived": 42,
+                "arrivals_by_op": {"GET_DATA": 30, "PUT_DATA": 12},
+            }
+        )
+
+        exporter.collect_storage_metrics()
+
+        assert exporter.storage_requests_arrived.labels(storage_unit_id="SU_001")._value.get() == 42
+        by_op = exporter.storage_arrivals_by_op
+        assert by_op.labels(storage_unit_id="SU_001", op_type="GET_DATA")._value.get() == 30
+        assert by_op.labels(storage_unit_id="SU_001", op_type="PUT_DATA")._value.get() == 12
+
+    def test_accept_queue_metrics_are_exported(self):
+        """The overflow/non-overflow split is what tells a dashboard if backlog is the issue."""
+        exporter = TQMetricsExporter()
+        fake_su_info = MagicMock()
+        fake_su_info.id = "SU_001"
+        exporter._storage_unit_infos = {"SU_001": fake_su_info}
+        exporter._query_storage_unit = MagicMock(
+            return_value={
+                "storage_unit_id": "SU_001",
+                "capacity": 1000,
+                "active_keys": 1,
+                "accept_queue": {
+                    "backlog": 4096,
+                    "peak_recv_q": 97,
+                    "peak_utilization": 0.02,
+                    "sk_drops_delta": 5,
+                    "listen_overflow_delta": 2,
+                    "non_overflow_drop_delta": 3,
+                },
+            }
+        )
+
+        exporter.collect_storage_metrics()
+
+        label = {"storage_unit_id": "SU_001"}
+        assert exporter.storage_accept_queue_backlog.labels(**label)._value.get() == 4096
+        assert exporter.storage_accept_queue_peak.labels(**label)._value.get() == 97
+        assert exporter.storage_socket_drops.labels(**label)._value.get() == 5
+        assert exporter.storage_listen_overflows.labels(**label)._value.get() == 2
+        assert exporter.storage_listen_other_drops.labels(**label)._value.get() == 3
+
+    def test_accept_queue_series_absent_when_the_probe_is_off(self):
+        """The probe is opt-in; reporting 0 drops would read as 'measured, and none'."""
+        exporter = TQMetricsExporter()
+        fake_su_info = MagicMock()
+        fake_su_info.id = "SU_001"
+        exporter._storage_unit_infos = {"SU_001": fake_su_info}
+        exporter._query_storage_unit = MagicMock(
+            return_value={"storage_unit_id": "SU_001", "capacity": 1000, "active_keys": 1}
+        )
+
+        exporter.collect_storage_metrics()
+
+        exported = {sample.name for metric in exporter.registry.collect() for sample in metric.samples}
+        assert "tq_storage_socket_drops" not in exported
+        assert "tq_storage_accept_queue_backlog" not in exported
 
     def test_storage_metrics_handles_query_failure(self):
         """If a storage unit query fails, other units should still be collected."""

@@ -63,9 +63,28 @@ class StorageUnitTimeout(RuntimeError):
     """A storage unit did not answer within the send/recv timeout.
 
     Distinct from an error the unit reported: only a missing answer is worth a new connection.
-    The message must name the unit, its endpoint and the timeout, because it is what the callers
-    of ``put_data`` and ``get_data`` see, and the retry logs rely on it instead of repeating them.
     """
+
+
+def _describe_unit_state(body: dict[str, Any]) -> str:
+    """Summarize a successful probe: the unit is serving again, plus its own counters.
+
+    Draws no conclusion about the timed-out request: the counters are cumulative per
+    operation and carry no request identity, so no value of them locates one request.
+    """
+    parts = [
+        f"requests_arrived={body.get('requests_arrived')}",
+        f"arrivals_by_op={body.get('arrivals_by_op')}",
+        f"active_keys={body.get('active_keys')}",
+        f"rss_gb={body.get('process_rss_bytes', 0) / 2**30:.2f}",
+    ]
+    op_stats = body.get("op_stats") or {}
+    if op_stats:
+        parts.append(f"completed={ {op: stats.get('request_count') for op, stats in op_stats.items()} }")
+    else:
+        # Only with Prometheus enabled; an empty dict would read as "served nothing".
+        parts.append("completed=unavailable(prometheus_disabled)")
+    return f"verdict=unit_serving_again ({' '.join(parts)})"
 
 
 _SU_SUBDIR = "simple_storage"
@@ -240,9 +259,10 @@ class AsyncSimpleStorageManager(StorageManager):
         return response_msg.body
 
     async def _diagnose_storage_unit(self, target_storage_unit: str) -> str:
-        """Classify a timeout as a lost request, a stuck unit, or an unreachable node.
+        """Report whether the unit is reachable and serving after a request to it timed out.
 
         Returns one log line and never raises: it runs while another failure is being reported.
+        Says nothing about where that request went; no per-request state exists to show it.
         """
         info = self.storage_unit_infos.get(target_storage_unit)
         if info is None:
@@ -259,16 +279,12 @@ class AsyncSimpleStorageManager(StorageManager):
 
         try:
             body = await self._probe_storage_unit(target_storage_unit=target_storage_unit)
-            op_counts = {op: stats.get("request_count") for op, stats in (body.get("op_stats") or {}).items()}
-            return (
-                f"{tcp} verdict=request_lost_in_flight (unit answered a fresh probe: "
-                f"ops={op_counts} active_keys={body.get('active_keys')} "
-                f"rss_gb={body.get('process_rss_bytes', 0) / 2**30:.2f})"
-            )
         except zmq.error.Again:
             return f"{tcp} verdict=unit_not_serving (no probe answer in {TQ_SIMPLE_STORAGE_PROBE_TIMEOUT}s)"
         except Exception as e:
             return f"{tcp} verdict=unknown (probe failed: {type(e).__name__}: {e})"
+
+        return f"{tcp} {_describe_unit_state(body)}"
 
     async def _request_with_retry(
         self,

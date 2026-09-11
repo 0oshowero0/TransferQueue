@@ -60,6 +60,8 @@ Steps:
 |---------------------|---------|-------------|
 | `TQ_METRICS_COLLECT_INTERVAL` | `10` | Background collection interval (seconds) |
 | `TQ_METRICS_STORAGE_TIMEOUT` | `5` | ZMQ timeout for storage unit queries (seconds) |
+| `TQ_ACCEPT_PROBE_INTERVAL` | `0` (off) | Accept-queue sampling period (seconds); enables the accept-queue metrics below |
+| `TQ_STORAGE_ZMQ_BACKLOG` | `4096` | Accept-queue depth for the storage unit's listening socket |
 
 ## Architecture
 
@@ -140,6 +142,38 @@ Steps:
 | `tq_storage_request_latency_p50` | Gauge | `storage_unit_id`, `op_type` | P50 request latency (seconds) |
 | `tq_storage_request_latency_p99` | Gauge | `storage_unit_id`, `op_type` | P99 request latency (seconds) |
 
+### Storage Request-Loss Diagnostics (collected via ZMQ, exposed on controller)
+
+Arrivals are counted when the worker decodes a request, while `tq_storage_request_ops` only
+advances once one completes, so a sustained gap between them means requests are arriving and
+not finishing. The counters are cumulative per operation and carry no request identity, so
+they characterise a unit, not any individual request.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `tq_storage_requests_arrived` | Gauge | `storage_unit_id` | Requests decoded by the worker, whether or not they completed |
+| `tq_storage_arrivals_by_op` | Gauge | `storage_unit_id`, `op_type` | Same, broken down by operation |
+
+The accept-queue series below exist only when the unit runs with `TQ_ACCEPT_PROBE_INTERVAL`
+set; the series are removed rather than reported as zero when the probe is off, so a missing
+series means "not measured" rather than "no drops". `tq_storage_accept_queue_peak` and the two
+drop counters are cumulative since the probe started, so use `rate()` on them.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `tq_storage_accept_queue_backlog` | Gauge | `storage_unit_id` | Configured accept-queue depth (`TQ_STORAGE_ZMQ_BACKLOG`) |
+| `tq_storage_accept_queue_peak` | Gauge | `storage_unit_id` | Deepest accept-queue occupancy seen by the probe |
+| `tq_storage_accept_queue_peak_utilization_ratio` | Gauge | `storage_unit_id` | Peak occupancy as a fraction of the backlog |
+| `tq_storage_socket_drops` | Gauge | `storage_unit_id` | Connections dropped on this listening socket since the probe started |
+| `tq_storage_listen_overflows` | Gauge | `storage_unit_id` | Namespace-wide accept-queue overflows since the probe started |
+| `tq_storage_listen_other_drops` | Gauge | `storage_unit_id` | Namespace-wide establishment drops that were **not** overflows |
+
+The kernel charges a listening socket's `sk_drops` on several connection-establishment
+failures — a full accept queue, but also failures to allocate or route the new connection — so
+`tq_storage_socket_drops` rising locates the socket, not the cause. Compare the last two
+series: a non-zero `tq_storage_listen_other_drops` means raising the backlog would not have
+prevented every drop in that window.
+
 ### Storage Unit Native Metrics (exposed on each storage unit's own endpoint)
 
 | Metric | Type | Labels | Description |
@@ -163,6 +197,7 @@ The dashboard ([`scripts/grafana_dashboard.json`](../scripts/grafana_dashboard.j
 | **Request Throughput & Latency** | Controller Request Rate (ops/s), Controller Request Latency (repeats per quantile) |
 | **Partition Status** | Samples per Partition, Production Progress, Consumption Progress |
 | **Storage Units** | Utilization Bar Gauge, Active Keys, Capacity vs Active Keys, RSS Memory, Storage Request Rate, Storage Request Latency (repeats per quantile), Produced vs Cleared Samples/s, Active Keys Delta |
+| **Storage Request-Loss Diagnostics** | Arrived vs Completed/s, Accept-Queue Peak vs Backlog, Listening-Socket Drops/s, Overflow vs Other Establishment Drops/s |
 
 ### Template Variables
 

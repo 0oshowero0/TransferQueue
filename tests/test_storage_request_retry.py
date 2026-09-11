@@ -147,7 +147,11 @@ def test_log_heavy_operation_thresholds(caplog, elapsed, payload_bytes, should_l
 @pytest.mark.parametrize(
     "tcp_result, probe_result, expected",
     [
-        ((None, None), {"active_keys": 4, "op_stats": {"GET_DATA": {"request_count": 1025}}}, "request_lost"),
+        # A probe that answers proves only that the unit is serving again, whatever the
+        # cumulative counters happen to say.
+        ((None, None), {"active_keys": 4, "arrivals_by_op": {"GET_DATA": 0}}, "unit_serving_again"),
+        ((None, None), {"active_keys": 4, "arrivals_by_op": {"GET_DATA": 9}}, "unit_serving_again"),
+        ((None, None), {"active_keys": 4}, "unit_serving_again"),
         ((None, None), zmq.error.Again(), "unit_not_serving"),
         (ConnectionRefusedError(), zmq.error.Again(), "tcp=down(ConnectionRefusedError)"),
     ],
@@ -168,6 +172,41 @@ async def test_diagnosis_classifies_the_failure(tcp_result, probe_result, expect
         diagnosis = await manager._diagnose_storage_unit("unit_a")
 
     assert expected in diagnosis
+
+
+def test_diagnosis_does_not_report_empty_op_stats_as_zero_traffic():
+    """op_stats is Prometheus-gated, so an empty dict must not read as 'served nothing'."""
+    described = ssm._describe_unit_state({"requests_arrived": 7, "active_keys": 1})
+
+    assert "completed=unavailable(prometheus_disabled)" in described
+    assert "completed={}" not in described
+
+
+@pytest.mark.parametrize(
+    "arrivals",
+    [
+        # Nine historical GETs, all already completed: they say nothing about this request.
+        {"GET_DATA": 9},
+        # The unit restarted during the timeout window, so its counters began again at zero.
+        {"GET_DATA": 0},
+        # The request arrived and finished after the caller gave up waiting.
+        {"GET_DATA": 10},
+    ],
+)
+def test_cumulative_counters_never_become_a_claim_about_this_request(arrivals):
+    """Counters are per-op and cumulative, so no value of them locates one request.
+
+    They carry no request id, never decrease, and reset when the unit restarts, so both
+    directions of inference are unsound: a nonzero count may be entirely historical, and a
+    zero one may mean the request reached a previous process.
+    """
+    described = ssm._describe_unit_state({"requests_arrived": sum(arrivals.values()), "arrivals_by_op": arrivals})
+
+    assert "verdict=unit_serving_again" in described
+    assert "arrived_but_unfinished" not in described
+    assert "request_lost_in_flight" not in described
+    # The raw counters stay in the line as triage input, just not as a verdict.
+    assert "arrivals_by_op=" in described
 
 
 @pytest.mark.asyncio

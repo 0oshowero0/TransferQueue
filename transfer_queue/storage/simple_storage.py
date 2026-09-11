@@ -43,6 +43,7 @@ from transfer_queue.utils.zmq_utils import (
 
 if TYPE_CHECKING:
     from transfer_queue.metrics import TQMetricsExporter
+    from transfer_queue.utils.accept_probe import AcceptQueueProbe
 
 logger = get_logger(__name__)
 
@@ -51,6 +52,12 @@ TQ_NUM_THREADS = int(os.environ.get("TQ_NUM_THREADS", 8))
 
 # Marks a GET_ERROR reply as "the key is gone" so the caller can tell it apart from a real fault.
 KEY_NOT_FOUND_MARKER = "TQKeyNotFound"
+
+# Accept-queue depth for the client-facing ROUTER. A full queue loses connections silently.
+TQ_STORAGE_ZMQ_BACKLOG = int(os.environ.get("TQ_STORAGE_ZMQ_BACKLOG", 4096))
+
+# Accept-queue sampling period in seconds; 0 disables the probe. Keep sub-second.
+TQ_ACCEPT_PROBE_INTERVAL = float(os.environ.get("TQ_ACCEPT_PROBE_INTERVAL", 0))
 
 
 class StorageKeyNotFoundError(KeyError):
@@ -168,6 +175,10 @@ class SimpleStorageUnit:
         zmq_server_info: ZMQ connection information for clients.
     """
 
+    _requests_arrived = 0
+    _arrivals_by_op: dict[str, int] = {}
+    _accept_probe = None
+
     def __init__(self, storage_unit_size: int | None = None):
         """Initialize a SimpleStorageUnit with the specified size.
 
@@ -179,6 +190,9 @@ class SimpleStorageUnit:
         self.storage_unit_size = storage_unit_size
 
         self.storage_data = StorageUnitData(self.storage_unit_size)
+
+        self._requests_arrived = 0
+        self._arrivals_by_op = {}
 
         # Internal communication address for proxy and workers
         self._inproc_addr = f"inproc://simple_storage_workers_{self.storage_unit_id}"
@@ -206,6 +220,7 @@ class SimpleStorageUnit:
             self.proxy_thread,
             self.zmq_context,
             self.put_get_socket,
+            self._accept_probe,
         )
 
     def _init_zmq_socket(self) -> None:
@@ -219,6 +234,7 @@ class SimpleStorageUnit:
 
         # Frontend: ROUTER for receiving client requests
         self.put_get_socket = create_zmq_socket(self.zmq_context, zmq.ROUTER, self._node_ip)
+        self.put_get_socket.setsockopt(zmq.BACKLOG, TQ_STORAGE_ZMQ_BACKLOG)
 
         while True:
             try:
@@ -228,6 +244,18 @@ class SimpleStorageUnit:
             except zmq.ZMQError:
                 logger.warning(f"[{self.storage_unit_id}]: Try to bind ZMQ sockets failed, retrying...")
                 continue
+
+        if TQ_ACCEPT_PROBE_INTERVAL > 0:
+            # Lazy: the probe shells out to ``ss`` on a timer, so keep it out of runs that
+            # have not enabled it.
+            from transfer_queue.utils.accept_probe import AcceptQueueProbe
+
+            self._accept_probe = AcceptQueueProbe(
+                port=self._put_get_socket_port,
+                owner_id=str(self.storage_unit_id),
+                interval_s=TQ_ACCEPT_PROBE_INTERVAL,
+            )
+            self._accept_probe.start()
 
         # Backend: DEALER for worker communication (connected via zmq.proxy)
         self.worker_socket = create_zmq_socket(self.zmq_context, zmq.DEALER, self._node_ip)
@@ -348,6 +376,9 @@ class SimpleStorageUnit:
                 started = time.perf_counter()
 
                 try:
+                    self._requests_arrived += 1
+                    self._arrivals_by_op[operation.name] = self._arrivals_by_op.get(operation.name, 0) + 1
+
                     logger.debug(f"[{self.storage_unit_id}]: worker received operation: {operation}")
 
                     # Process request
@@ -582,7 +613,22 @@ class SimpleStorageUnit:
             "capacity": self.storage_unit_size,
             "active_keys": self.storage_data.active_key_count,
             "process_rss_bytes": process_rss,
+            # Counted on arrival; op_stats below only advances on completion.
+            "requests_arrived": self._requests_arrived,
+            "arrivals_by_op": dict(self._arrivals_by_op),
         }
+
+        if self._accept_probe is not None:
+            stats = self._accept_probe.stats
+            metrics["accept_queue"] = {
+                "backlog": stats.backlog,
+                "peak_recv_q": stats.peak_recv_q,
+                "peak_utilization": stats.peak_utilization,
+                "sk_drops_delta": stats.sk_drops_delta,
+                "listen_overflow_delta": stats.overflow_delta,
+                "non_overflow_drop_delta": stats.non_overflow_drop_delta,
+                "samples": stats.samples,
+            }
 
         # Include per-operation stats if Prometheus metrics are enabled
         if self._metrics is not None:
@@ -741,12 +787,17 @@ class SimpleStorageUnit:
         proxy_thread: Thread | None,
         zmq_context: zmq.Context | None,
         put_get_socket: zmq.Socket | None,
+        accept_probe: "AcceptQueueProbe | None" = None,
     ) -> None:
         """Clean up resources on garbage collection."""
         logger.info("Shutting down SimpleStorageUnit resources...")
 
         # Signal all threads to stop
         shutdown_event.set()
+
+        # Before the ZMQ teardown: the probe runs on its own timer and would outlive the unit.
+        if accept_probe is not None:
+            accept_probe.stop()
 
         # Terminate put_get_socket
         if put_get_socket:
