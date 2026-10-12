@@ -136,6 +136,33 @@ multiple units is not a distributed transaction.
 
 Refer to [tutorials/basic.ipynb](https://github.com/Ascend/TransferQueue/blob/main/tutorial/basic.ipynb) and [tutorials/02_kv_interface.py](https://github.com/Ascend/TransferQueue/blob/main/tutorial/02_kv_interface.py) for detailed usage examples.
 
+**KV Key Locks**
+
+Locks are **advisory**: KV calls never check them, so every writer that needs mutual exclusion must take the lock. `(async_)kv_local_lock` excludes threads and asyncio tasks of one process and needs no setup.
+
+- **(async_)kv_global_lock(keys, partition_id, timeout=None, lease_s=30)**: Hold an exclusive cluster-wide lock on `(partition_id, key)` pairs under a lease that a background thread renews. Yields a **GlobalLease**: call `check()` right before writes (it raises **LockLostError** once the lease is lost); `names` lists the locked pairs. Exiting the block also raises `LockLostError` if the lease was lost.
+- **kv_lock_list(partition_id=None)**: Return `{"holders": [...], "waiters": n}` for live global locks.
+
+```python
+import os
+os.environ["TQ_ENABLE_KV_GLOBAL_LOCK"] = "1"  # only in the process that creates TransferQueue, before tq.init()
+tq.init()
+with tq.kv_global_lock(["a", "b"], "train", timeout=30) as lease:
+    lease.check()
+    tq.kv_put("a", "train", fields={"v": torch.tensor([1])})
+```
+
+- **Enabling**: set these before `tq.init()` in the process that creates TransferQueue; only that process reads them. Processes and Ray workers that attach find the lock actors by name and need nothing. Without the switch, `kv_global_lock` raises `RuntimeError`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TQ_ENABLE_KV_GLOBAL_LOCK` | off | `1`/`true`/`yes`/`y`/`on` starts the lock actors |
+| `TQ_KV_GLOBAL_LOCK_NUM_SHARDS` | `8` | Number of lock actors (integer >= 1) |
+| `TQ_KV_GLOBAL_LOCK_MAX_WAITING_ACQUIRES` | `10000` | Acquire calls each lock actor lets wait at once (integer >= 1) |
+
+- **Shards**: keys are spread by hash over `TQ_KV_GLOBAL_LOCK_NUM_SHARDS` `TransferQueueLockManager` actors, which `tq.init()` pins round-robin to the alive Ray nodes (per-node counts differ by at most 1). Keys on several actors are taken one actor at a time, so a multi-key request may hold some keys while it waits for others.
+- **Capacity**: `TQ_KV_GLOBAL_LOCK_MAX_WAITING_ACQUIRES` caps the acquire calls each actor lets wait at once. A request past the cap keeps its queue place but polls once per window (5 s, or `lease_s / 3` if shorter), so it may see its grant up to a window late. About `TQ_KV_GLOBAL_LOCK_NUM_SHARDS` × this value (80,000 by default) requests can wait without that delay. More shards spread the load, but all waiters on one key share one actor, so a hot key is bounded by this value alone. Each actor's Ray `max_concurrency` is this value plus 16 reserved slots shared, without priority, by renew, release, `kv_lock_list` and turned-away acquires. Every waiter still costs one call per window: past an actor's call throughput, renewals are delayed and leases can be lost.
+
 #### StreamingDataLoader API
 
 Designed as a drop-in replacement for the standard PyTorch `DataLoader`, this API allows each rank to automatically consume data without single-controller intervention.
