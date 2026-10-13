@@ -1397,13 +1397,14 @@ class SimpleStorageUnit:
             for op_type in ("PUT_DATA", "UPDATE_DATA", "GET_DATA", "CLEAR_DATA", "DUMP_ROWS", "LOAD_ROWS"):
                 try:
                     hist = self._metrics.request_duration.labels(op_type=op_type)
-                    counter = self._metrics.request_total.labels(op_type=op_type)
                     duration_sum = hist._sum.get()
                     # Build cumulative counts once, reuse for total and quantiles
                     cumulative_counts = self._cumulative_bucket_counts(hist)
                     duration_count = cumulative_counts[-1] if cumulative_counts else 0
                     op_stats[op_type] = {
-                        "request_count": counter._value.get(),
+                        # Observed when the handler returns or raises. request_total counts entry and
+                        # agrees only because this worker answers GET_METRICS after each handler.
+                        "request_count": duration_count,
                         "latency_avg": duration_sum / duration_count if duration_count > 0 else 0,
                         "latency_p50": self._quantile_from_cumulative(hist, cumulative_counts, 0.50),
                         "latency_p99": self._quantile_from_cumulative(hist, cumulative_counts, 0.99),
