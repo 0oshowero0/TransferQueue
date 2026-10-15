@@ -500,6 +500,7 @@ class DataPartitionStatus:
         field_names: list[str],
         field_schema: dict[str, dict[str, Any]],
         custom_backend_meta: dict[int, dict[str, Any]] | None = None,
+        ready: bool = True,
     ) -> bool:
         """
         Update production status for specific samples and fields.
@@ -515,11 +516,20 @@ class DataPartitionStatus:
             field_schema: Columnar field schema {field_name: {dtype, shape, is_nested, ...}}
             custom_backend_meta: Optional per-sample per-field
                 custom metadata provided by storage backend
+            ready: Whether consumers may see these cells. False records the stored
+                value (field metadata) but hides it until a finalizing kv_update.
 
         Returns:
             True if update was successful, False on error
         """
         try:
+            # Same dtype check as FieldMeta.update, run first so a conflicting write changes nothing.
+            for name, incoming in field_schema.items():
+                existing = self.field_metadata.get(name)
+                dtype = incoming.get("dtype")
+                if existing is not None and None not in (existing.dtype, dtype) and existing.dtype != dtype:
+                    raise ValueError(f"Field {name!r} dtype mismatch: {existing.dtype} != {dtype}")
+
             # Derive field_names from field_schema to guarantee consistency
             field_names = list(field_schema.keys())
 
@@ -543,7 +553,7 @@ class DataPartitionStatus:
             # Update production status
             if self.production_status is not None and global_indices and field_names:
                 field_indices = [self.field_name_mapping.get(f) for f in field_names]
-                self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = 1
+                self.production_status[torch.tensor(global_indices)[:, None], torch.tensor(field_indices)] = int(ready)
 
             # Update field metadata
             self._update_field_metadata(global_indices, field_schema, custom_backend_meta)
@@ -1130,6 +1140,7 @@ class TransferQueueController:
         global_indexes: list[int],
         field_schema: dict[str, dict[str, Any]],
         custom_backend_meta: dict[int, dict[str, Any]] | None = None,
+        ready: bool = True,
     ) -> bool:
         """
         Update production status for specific samples and fields in a partition.
@@ -1140,6 +1151,7 @@ class TransferQueueController:
             global_indexes: List of sample indices to update
             field_schema: Columnar field schema {field_name: {dtype, shape, is_nested, ...}}
             custom_backend_meta: Optional custom backend metadata
+            ready: False keeps the written cells hidden from consumers (unfinalized kv_update)
 
         Returns:
             True if update was successful, False otherwise
@@ -1150,11 +1162,13 @@ class TransferQueueController:
             logger.error(f"Partition {partition_id} not found")
             return False
 
-        success = partition.update_production_status(global_indexes, field_names, field_schema, custom_backend_meta)
+        success = partition.update_production_status(
+            global_indexes, field_names, field_schema, custom_backend_meta, ready=ready
+        )
         if success:
             logger.debug(
                 f"[{self.controller_id}]: Updated production status for partition {partition_id}: "
-                f"samples={global_indexes}, fields={field_names}"
+                f"samples={global_indexes}, fields={field_names}, ready={ready}"
             )
         return success
 
@@ -1717,6 +1731,32 @@ class TransferQueueController:
 
         return self.generate_batch_meta(partition_id, verified_global_indexes, data_fields, mode="force_fetch")
 
+    def kv_prepare_update(
+        self, keys: list[str], partition_id: str, fields: list[str]
+    ) -> tuple[BatchMeta, dict[str, dict[str, Any]]]:
+        """Register missing keys and tell kv_update, per field, which rows to merge into.
+
+        Storage units may keep values the controller no longer tracks (e.g. after a failed
+        clear), so ``held`` comes from ``FieldMeta.global_indexes``, which covers hidden cells.
+
+        Returns:
+            The keys' BatchMeta and ``{field: {"dtype", "is_non_tensor", "held"}}``, where
+            ``held`` is aligned with the BatchMeta rows. The types are None for a new field.
+        """
+        metadata = self.kv_retrieve_meta(keys, partition_id, create=True)
+        partition = self._get_partition(partition_id)
+        assert partition is not None
+        merge_plan = {}
+        for name in fields:
+            meta = partition.field_metadata.get(name)
+            held = meta.global_indexes if meta is not None else set()
+            merge_plan[name] = {
+                "dtype": meta.dtype if meta is not None else None,
+                "is_non_tensor": meta.is_non_tensor if meta is not None else None,
+                "held": [idx in held for idx in metadata.global_indexes],
+            }
+        return metadata, merge_plan
+
     def kv_clear_fields(self, keys: list[str], partition_id: str, fields: list[str]) -> BatchMeta:
         """Clear fields of existing keys and return the cleared cells' metadata for storage deletion.
 
@@ -1783,9 +1823,10 @@ class TransferQueueController:
             partition_id: Partition that owns ``keys``.
 
         Returns:
-            ``{"rows": {key: {"global_index", "fields", "tag"}}, "field_schema": {field:
-            {"is_nested", "is_non_tensor"}}}``. ``fields`` is empty for a row with no
-            produced field yet; ``field_schema`` covers the fields of the described rows.
+            ``{"rows": {key: {"global_index", "fields", "unfinalized", "tag"}}, "field_schema":
+            {field: {"is_nested", "is_non_tensor"}}}``. ``fields`` is empty for a row with no
+            produced field yet; ``unfinalized`` lists the stored fields not yet ready (written
+            by ``kv_update(finalize=False)``); ``field_schema`` covers the described rows' fields.
 
         Raises:
             KeyError: The partition or any key does not exist.
@@ -1799,18 +1840,23 @@ class TransferQueueController:
         if missing_keys:
             raise KeyError(f"keys not found in partition {partition_id!r}: {missing_keys}")
 
-        rows: dict[str, dict[str, Any]] = {
-            key: {
+        rows: dict[str, dict[str, Any]] = {}
+        for key, global_index in zip(keys, cast(list[int], global_indexes), strict=True):
+            fields = sorted(
+                field_name
+                for field_name, field_meta in partition.field_metadata.items()
+                if global_index in field_meta.global_indexes
+            )
+            rows[key] = {
                 "global_index": global_index,
-                "fields": sorted(
-                    field_name
-                    for field_name, field_meta in partition.field_metadata.items()
-                    if global_index in field_meta.global_indexes
-                ),
+                "fields": fields,
+                "unfinalized": [
+                    name
+                    for name in fields
+                    if not partition.production_status[global_index, partition.field_name_mapping[name]]
+                ],
                 "tag": partition.custom_meta.get(global_index, {}),
             }
-            for key, global_index in zip(keys, cast(list[int], global_indexes), strict=True)
-        }
         # Only the declared types: row dtypes and shapes live with the storage units.
         field_schema = {
             name: {"is_nested": bool(meta.is_nested), "is_non_tensor": bool(meta.is_non_tensor)}
@@ -2043,6 +2089,7 @@ class TransferQueueController:
             ZMQRequestType.KV_RETRIEVE_KEYS: self._handle_kv_retrieve_keys_request,
             ZMQRequestType.KV_LIST: self._handle_kv_list_request,
             ZMQRequestType.KV_DESCRIBE: self._handle_kv_describe_request,
+            ZMQRequestType.KV_PREPARE_UPDATE: self._handle_kv_prepare_update_request,
             ZMQRequestType.VALIDATE_DUMP_SCHEMA: self._handle_validate_dump_schema_request,
             ZMQRequestType.KV_CLEAR_FIELDS: self._handle_kv_clear_fields_request,
             ZMQRequestType.SAVE_CONTROLLER_CHECKPOINT: self._handle_save_controller_checkpoint_request,
@@ -2097,6 +2144,7 @@ class TransferQueueController:
             global_indexes=global_indexes,
             field_schema=params.get("field_schema", {}),
             custom_backend_meta=params.get("custom_backend_meta", {}),
+            ready=params.get("ready", True),
         )
         if success:
             if self._metrics is not None:
@@ -2246,6 +2294,13 @@ class TransferQueueController:
         params = request_msg.body
         description = self.kv_describe(params["keys"], params["partition_id"])
         return self._make_response(request_msg, ZMQRequestType.KV_DESCRIBE_RESPONSE, description)
+
+    def _handle_kv_prepare_update_request(self, request_msg: ZMQMessage) -> ZMQMessage:
+        params = request_msg.body
+        metadata, merge_plan = self.kv_prepare_update(params["keys"], params["partition_id"], params["fields"])
+        return self._make_response(
+            request_msg, ZMQRequestType.KV_PREPARE_UPDATE_RESPONSE, {"metadata": metadata, "merge_plan": merge_plan}
+        )
 
     def _handle_kv_clear_fields_request(self, request_msg: ZMQMessage) -> ZMQMessage:
         params = request_msg.body

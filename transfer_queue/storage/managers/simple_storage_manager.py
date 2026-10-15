@@ -544,11 +544,13 @@ class AsyncSimpleStorageManager(StorageManager):
         metadata: BatchMeta,
         values: TensorDict,
         merge_fn: Callable[[Any, Any], Any],
+        merge_plan: dict[str, dict[str, Any]],
+        finalize: bool = True,
     ) -> dict[str, dict[str, Any]]:
-        """Merge values on each owner unit and notify the controller.
+        """Merge or add values on each owner unit and notify the controller.
 
         Each unit reports the values it stored; this assembles one batch-level
-        field_schema so production status stays ready.
+        field_schema. ``finalize`` decides whether the fields become ready.
         """
         logger.debug(f"[{self.storage_manager_id}]: receive update_data request, updating {metadata.size} samples.")
 
@@ -564,6 +566,10 @@ class AsyncSimpleStorageManager(StorageManager):
         tasks = []
         for su_id, group in routing.items():
             storage_data = {f: self._select_by_positions(values[f], group.batch_positions) for f in field_names}
+            unit_columns = {
+                f: {**merge_plan[f], "held": [merge_plan[f]["held"][p] for p in group.batch_positions]}
+                for f in field_names
+            }
             tasks.append(
                 self._request_with_retry(
                     "update",
@@ -574,7 +580,7 @@ class AsyncSimpleStorageManager(StorageManager):
                         group.global_indexes,
                         storage_data,
                         merge_fn,
-                        {name: metadata.field_schema[name] for name in field_names},
+                        unit_columns,
                         target_storage_unit=su_id,
                     ),
                     # A merge reads stored state, so a replay after a lost answer
@@ -603,6 +609,7 @@ class AsyncSimpleStorageManager(StorageManager):
             metadata.partition_ids[0],
             metadata.global_indexes,
             field_schema,
+            ready=finalize,
         )
         if not published:
             raise RuntimeError(
@@ -674,7 +681,7 @@ class AsyncSimpleStorageManager(StorageManager):
         global_indexes: list[int],
         storage_data: dict[str, Any],
         merge_fn: Callable[[Any, Any], Any],
-        field_schema: dict[str, dict[str, Any]],
+        merge_plan: dict[str, dict[str, Any]],
         target_storage_unit: str,
         socket: zmq.Socket = None,
     ) -> dict[str, dict[str, Any]]:
@@ -683,7 +690,7 @@ class AsyncSimpleStorageManager(StorageManager):
             "global_indexes": global_indexes,
             "data": storage_data,
             "merge_fn": merge_fn,
-            "field_schema": field_schema,
+            "merge_plan": merge_plan,
         }
 
         request_msg = ZMQMessage.create(
@@ -1160,7 +1167,9 @@ class AsyncSimpleStorageManager(StorageManager):
         # dominate a wide cross-topology load. The notify pool bounds the concurrency.
         await asyncio.gather(
             *(
-                self.notify_data_update(partition_id, update["global_indexes"], update["field_schema"])
+                self.notify_data_update(
+                    partition_id, update["global_indexes"], update["field_schema"], ready=update["ready"]
+                )
                 for result in loaded
                 for update in result["updates"]
             )

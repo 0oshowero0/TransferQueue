@@ -568,6 +568,7 @@ def kv_batch_get(
     Raises:
         ValueError: If the partition or any of the keys is not found
         ValueError: If empty fields exist in any key (sample)
+        ValueError: If a field in ``select_fields`` is not ready in every found key
         ValueError: If ``parser_args`` is given without ``data_parser`` or does not match the
             number of keys
         RuntimeError: If ``data_parser`` fails or breaks its contract on a storage unit
@@ -646,6 +647,21 @@ def kv_list(partition_id: str | None = None) -> dict[str, dict[str, Any]]:
     return tq_client._run_coroutine(async_kv_list(partition_id=partition_id))
 
 
+def kv_describe(keys: list[str] | str, partition_id: str) -> dict[str, dict[str, Any]]:
+    """Describe which fields each key holds, including unfinalized ones.
+
+    See ``async_kv_describe``.
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>> rows = tq.kv_describe(keys=["sample_1", "sample_2"], partition_id="train")
+        >>> hidden = {key: row["unfinalized"] for key, row in rows.items() if row["unfinalized"]}
+    """
+    tq_client = _maybe_create_tq_client()
+    return tq_client._run_coroutine(async_kv_describe(keys=keys, partition_id=partition_id))
+
+
 def kv_clear(keys: list[str] | str, partition_id: str, fields: list[str] | str | None = None) -> None:
     """Clear key-value pairs from TransferQueue.
 
@@ -679,22 +695,33 @@ def kv_update(
     partition_id: str,
     fields: dict[str, Any],
     merge_fn: Callable[[Any, Any], Any],
+    finalize: bool = True,
 ) -> KVBatchMeta:
-    """Merge new values into produced fields of one existing key.
+    """Merge new values into the fields of one key, adding the key or fields if missing.
+
+    A missing key is created and a field the controller does not record for the key
+    yet is stored as given, without calling ``merge_fn``. Unlike ``kv_put``, it takes
+    no ``tags`` or ``data_parser``.
 
     Args:
-        key: Existing user-specified key. The key is not created if it is missing.
+        key: User-specified key. Created if missing.
         partition_id: Partition that holds the key.
-        fields: New values keyed by an already-produced field name.
-        merge_fn: ``merge_fn(old, new) -> stored``. SimpleStorage runs it once
-            per field on the unit that owns the sample.
+        fields: New values keyed by field name.
+        merge_fn: ``merge_fn(old, new) -> stored`` for fields the key already holds,
+            hidden ones included. SimpleStorage runs it once per field on the unit
+            that owns the sample.
+        finalize: If False, the updated fields stay hidden from consumers until an update
+            with True (the default), so a field built over several updates never shows an
+            intermediate value. Hiding a field that is already ready is not guaranteed:
+            readers that already hold its metadata can still see the new value.
 
     Returns:
         Metadata for the updated sample.
 
     Raises:
-        ValueError: If the key or a field is missing.
         TypeError: If ``fields`` is not a non-empty dict or ``merge_fn`` is not callable.
+        RuntimeError: If ``merge_fn`` fails or a stored value would change the field's
+            tensor/non-tensor type or dtype; the failing storage unit writes nothing.
         NotImplementedError: If the storage backend is not SimpleStorage.
 
     Note:
@@ -708,6 +735,7 @@ def kv_update(
             partition_id=partition_id,
             fields=fields,
             merge_fn=merge_fn,
+            finalize=finalize,
         )
     )
 
@@ -717,15 +745,17 @@ def kv_batch_update(
     partition_id: str,
     fields: TensorDict,
     merge_fn: Callable[[Any, Any], Any],
+    finalize: bool = True,
 ) -> KVBatchMeta:
-    """Merge batched values into produced fields of existing keys.
+    """Merge batched values into the fields of keys, adding keys or fields if missing.
 
-    A timeout has an unknown outcome because a unit may commit after the caller
-    stops waiting. Do not blindly retry a merge.
+    See ``kv_update``. ``keys`` must be unique; a repeated key raises ``ValueError``
+    before anything is registered or written. A timeout has an unknown outcome because
+    a unit may commit after the caller stops waiting. Do not blindly retry a merge.
     """
     tq_client = _maybe_create_tq_client()
     return tq_client._run_coroutine(
-        async_kv_batch_update(keys=keys, partition_id=partition_id, fields=fields, merge_fn=merge_fn)
+        async_kv_batch_update(keys=keys, partition_id=partition_id, fields=fields, merge_fn=merge_fn, finalize=finalize)
     )
 
 
@@ -1021,6 +1051,7 @@ async def async_kv_batch_get(
     Raises:
         ValueError: If the partition or any of the keys is not found
         ValueError: If empty fields exist in any key (sample)
+        ValueError: If a field in ``select_fields`` is not ready in every found key
         ValueError: If ``parser_args`` is given without ``data_parser`` or does not match the
             number of keys
         RuntimeError: If ``data_parser`` fails or breaks its contract on a storage unit
@@ -1057,6 +1088,13 @@ async def async_kv_batch_get(
             fields_to_fetch = [select_fields]
         else:
             fields_to_fetch = select_fields
+        # The meta keeps only fields ready in every key; select_fields would drop the rest silently.
+        not_ready = [f for f in fields_to_fetch if f not in batch_meta.field_names]
+        if not_ready:
+            raise ValueError(
+                f"Fields {not_ready} are not ready in all the requested keys: missing, or written by "
+                "kv_update(finalize=False) and not finalized yet"
+            )
         batch_meta = batch_meta.select_fields(fields_to_fetch)
 
     if not batch_meta.is_ready:
@@ -1106,6 +1144,37 @@ async def async_kv_list(partition_id: str | None = None) -> dict[str, dict[str, 
     partition_info = await tq_client.async_kv_list(partition_id)
 
     return partition_info
+
+
+async def async_kv_describe(keys: list[str] | str, partition_id: str) -> dict[str, dict[str, Any]]:
+    """Asynchronously describe which fields each key holds, including unfinalized ones.
+
+    ``kv_batch_get`` returns only fields that are ready in every key, so this is the way
+    to find fields written by ``kv_update(finalize=False)`` and not yet finalized.
+
+    Args:
+        keys: Single key or list of keys to describe.
+        partition_id: Partition containing the keys.
+
+    Returns:
+        ``{key: {"fields", "unfinalized"}}``. ``fields`` lists every stored field of the
+        key and ``unfinalized`` the subset that is not ready yet.
+
+    Raises:
+        RuntimeError: If the partition or any key does not exist.
+
+    Example:
+        >>> import transfer_queue as tq
+        >>> tq.init()
+        >>> rows = await tq.async_kv_describe(keys="sample_1", partition_id="train")
+        >>> print(rows["sample_1"]["unfinalized"])
+    """
+    keys = [keys] if isinstance(keys, str) else keys
+    tq_client = _maybe_create_tq_client()
+    description = await tq_client.async_kv_describe(list(dict.fromkeys(keys)), partition_id)
+    return {
+        key: {"fields": row["fields"], "unfinalized": row["unfinalized"]} for key, row in description["rows"].items()
+    }
 
 
 async def async_kv_clear(keys: list[str] | str, partition_id: str, fields: list[str] | str | None = None) -> None:
@@ -1168,13 +1237,15 @@ async def async_kv_update(
     partition_id: str,
     fields: dict[str, Any],
     merge_fn: Callable[[Any, Any], Any],
+    finalize: bool = True,
 ) -> KVBatchMeta:
-    """Asynchronously update fields of an existing key. See ``kv_update``."""
+    """Asynchronously merge or add fields of one key. See ``kv_update``."""
     return await async_kv_batch_update(
         keys=[key],
         partition_id=partition_id,
         fields=_single_update_batch(fields),
         merge_fn=merge_fn,
+        finalize=finalize,
     )
 
 
@@ -1183,8 +1254,9 @@ async def async_kv_batch_update(
     partition_id: str,
     fields: TensorDict,
     merge_fn: Callable[[Any, Any], Any],
+    finalize: bool = True,
 ) -> KVBatchMeta:
-    """Asynchronously merge batched values into produced fields of existing keys."""
+    """Asynchronously merge or add batched fields of keys. See ``kv_update``."""
     if not isinstance(keys, list) or not keys or not all(isinstance(key, str) for key in keys):
         raise TypeError("keys must be a non-empty list of strings")
     if not isinstance(fields, TensorDict) or not fields.keys():
@@ -1195,15 +1267,22 @@ async def async_kv_batch_update(
         raise TypeError("merge_fn must be callable")
     _check_unique_keys(keys)
     tq_client = _maybe_create_tq_client()
-    batch_meta = await tq_client.async_kv_retrieve_meta(keys=keys, partition_id=partition_id, create=False)
+    # Checked up front: missing keys are registered before storage is asked to merge.
+    if not isinstance(tq_client.storage_manager, AsyncSimpleStorageManager):
+        raise NotImplementedError(
+            f"kv_update is not supported by {type(tq_client.storage_manager).__name__}; "
+            "it requires the SimpleStorage backend"
+        )
+    batch_meta, merge_plan = await tq_client.async_kv_prepare_update(
+        keys=keys, partition_id=partition_id, fields=list(fields.keys())
+    )
 
     if batch_meta.size != len(keys):
-        raise ValueError("Some keys or the partition were not found")
-    missing_fields = sorted(set(fields.keys()) - set(batch_meta.field_names))
-    if missing_fields:
-        raise ValueError(f"Fields are not produced for every key: {missing_fields}")
+        raise RuntimeError(f"Retrieved BatchMeta size {batch_meta.size} does not match {len(keys)} keys")
 
-    batch_meta = await tq_client.async_update(metadata=batch_meta, values=fields, merge_fn=merge_fn)
+    batch_meta = await tq_client.async_update(
+        metadata=batch_meta, values=fields, merge_fn=merge_fn, merge_plan=merge_plan, finalize=finalize
+    )
 
     return KVBatchMeta(
         keys=keys,

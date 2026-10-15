@@ -116,15 +116,26 @@ To simplify the usage of TransferQueue, we provide a Redis-style high-level API 
 - **(async_)kv_put**: Insert/Update a multi-column sample by key, with an optional metadata tag.
 - **(async_)kv_batch_put**: Put multiple key-value pairs efficiently in batches.
 - **(async_)kv_batch_get**: Retrieve samples (by keys), supporting column selection (by fields) and, on SimpleStorage, an optional `data_parser` run on the storage units.
-- **(async_)kv_update / (async_)kv_batch_update**: Merge new values into already-produced fields with `merge_fn(old, new)`. SimpleStorage only.
+- **(async_)kv_update / (async_)kv_batch_update**: Merge new values into fields with `merge_fn(old, new)`, adding missing keys and fields. SimpleStorage only.
 - **(async_)kv_list**: List keys and tags (metadata) in a partition.
+- **(async_)kv_describe**: Show each key's stored fields, including those `kv_update(finalize=False)` keeps hidden.
 - **(async_)kv_clear**: Remove key-value pairs from storage, or only selected `fields` while keeping the keys.
 
-`kv_update` preserves each field's tensor/non-tensor type and tensor dtype. A
-timeout has an unknown outcome because a storage unit may commit after the
-caller stops waiting, so non-idempotent merge operations must not be retried
-blindly. Updates are atomic within one storage-unit request; a batch spanning
-multiple units is not a distributed transaction.
+`kv_update` merges only the rows the controller records as holding the field
+(including hidden ones); every other row takes the new value as given, without
+calling `merge_fn`, and overwrites anything a storage unit kept after a failed
+clear. Every stored value must keep the field's tensor/non-tensor type and
+tensor dtype in the partition. A timeout has an unknown outcome because a
+storage unit may commit after the caller stops waiting, so non-idempotent merge
+operations must not be retried blindly. Updates are atomic within one
+storage-unit request; a batch spanning multiple units is not a distributed
+transaction.
+
+To build a field over several updates without exposing intermediate values, pass
+`finalize=False` to every `kv_update` except the last one, which uses the default
+`finalize=True`. Until then the field is stored but not ready, so samplers, the
+dataloader and `kv_batch_get` do not see it. Updates to one key must come from
+one writer at a time; use `kv_global_lock` if several processes write the same key.
 
 **Advanced: parsing on get.** Like `kv_batch_put`, `kv_batch_get` takes a
 `data_parser`, here run by each SimpleStorage unit before it replies, so only the

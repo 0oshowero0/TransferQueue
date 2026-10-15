@@ -243,6 +243,54 @@ class TestDumpLoadRoundtrip:
         retrieved = tq.kv_batch_get(keys=["h1"], partition_id=partition_id, select_fields=["routed_experts"])
         _assert_rows_equal(retrieved["routed_experts"], [torch.tensor([7, 8])])
 
+    def test_restore_keeps_unfinalized_fields_hidden(self, tq_system, dump_dir, controller):
+        partition_id = "d_unfinalized"
+        _put_rows(partition_id, ["u0", "u1"])
+
+        def concat(old, new):
+            return torch.cat([old, new])
+
+        tq.kv_update(
+            key="u1",
+            partition_id=partition_id,
+            fields={"response": torch.tensor([1, 2])},
+            merge_fn=concat,
+            finalize=False,
+        )
+
+        tq.dump_data_by_key(dump_dir, ["u0", "u1"], partition_id)
+        assert _read_row_index(dump_dir)["rows"]["u1"]["unfinalized"] == ["response"]
+        ray.get(controller.clear_partition.remote(partition_id))
+        tq.load_data_by_key(dump_dir)
+
+        snapshot = ray.get(controller.get_partition_snapshot.remote(partition_id))
+        row = snapshot.keys_mapping["u1"]
+        assert snapshot.production_status[row, snapshot.field_name_mapping["input_ids"]] == 1
+        assert snapshot.production_status[row, snapshot.field_name_mapping["response"]] == 0
+
+        tq.kv_update(key="u1", partition_id=partition_id, fields={"response": torch.tensor([3])}, merge_fn=concat)
+        retrieved = tq.kv_batch_get(keys="u1", partition_id=partition_id, select_fields="response")
+        _assert_rows_equal(retrieved["response"], [torch.tensor([1, 2, 3])])
+
+    def test_restores_a_version_3_dump_as_ready(self, tq_system, dump_dir, controller):
+        partition_id = "d_version3"
+        _put_rows(partition_id, ["w0"])
+        tq.dump_data_by_key(dump_dir, ["w0"], partition_id)
+
+        # Rewrite it as version 3 wrote it: no ``unfinalized`` in the row index.
+        row_index = _read_row_index(dump_dir)
+        del row_index["rows"]["w0"]["unfinalized"]
+        torch.save(row_index, dump_dir / "row_index.pt")
+        info_path = dump_dir / "dump_info.json"
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+        info["format_version"] = 3
+        info_path.write_text(json.dumps(info), encoding="utf-8")
+
+        ray.get(controller.clear_partition.remote(partition_id))
+        tq.load_data_by_key(dump_dir)
+        retrieved = tq.kv_batch_get(keys="w0", partition_id=partition_id, select_fields="input_ids")
+        _assert_rows_equal(retrieved["input_ids"], [_row_input_ids(0)])
+
     def test_other_partitions_are_untouched(self, tq_system, dump_dir, controller):
         """Restoring merges by key, unlike a checkpoint load which replaces everything."""
         # Define test data
@@ -681,10 +729,10 @@ def test_load_publishes_metadata_updates_concurrently(tq_system, monkeypatch):
         started, ready = [], asyncio.Event()
 
         async def load(shards, target_storage_unit):
-            updates = [{"global_indexes": [i], "field_schema": {}} for i in range(num_updates)]
+            updates = [{"global_indexes": [i], "field_schema": {}, "ready": True} for i in range(num_updates)]
             return {"bytes_read": 0, "updates": updates}
 
-        async def notify(partition_id, global_indexes, field_schema):
+        async def notify(partition_id, global_indexes, field_schema, **_kwargs):
             started.append(global_indexes)
             if len(started) == num_updates:
                 ready.set()
