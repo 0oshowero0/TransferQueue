@@ -63,6 +63,28 @@ TQ_SIMPLE_STORAGE_PROBE_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_PROBE_TI
 TQ_SIMPLE_STORAGE_DUMP_TIMEOUT = int(os.environ.get("TQ_SIMPLE_STORAGE_DUMP_TIMEOUT", 3600))
 
 
+_SHAREABLE_PARSER_ARG_TYPES = (type(None), bool, int, float, str)
+
+
+def _parser_arg_identity(parser_arg: Any, pos: int) -> tuple:
+    """Return a key equal for two plain parser_args (scalars and lists of them) of equal type and value.
+
+    Any other argument, such as a tensor, gets one unique to batch position ``pos``: a linked
+    row is then parsed once per such key instead of being shared across keys.
+    """
+
+    def identity(value: Any) -> tuple | None:
+        if isinstance(value, _SHAREABLE_PARSER_ARG_TYPES):
+            return (type(value), value)
+        if isinstance(value, list | tuple):
+            items = [identity(item) for item in value]
+            return None if None in items else (type(value), tuple(items))
+        return None
+
+    key = identity(parser_arg)
+    return ("position", pos) if key is None else ("value", key)
+
+
 class StorageUnitTimeout(RuntimeError):
     """A storage unit did not answer within the send/recv timeout.
 
@@ -800,7 +822,9 @@ class AsyncSimpleStorageManager(StorageManager):
         """
         Retrieve data from remote StorageUnit based on metadata.
 
-        Routes to each SU using global_idx % num_su (hash routing).
+        Routes to each SU using global_idx % num_su (hash routing). A linked field is read
+        from its source row, once however many samples link to it, or with ``parser_args`` once
+        per distinct plain parser_arg of those samples.
 
         Args:
             metadata: BatchMeta that contains metadata for data retrieval.
@@ -818,26 +842,61 @@ class AsyncSimpleStorageManager(StorageManager):
         if metadata.size == 0:
             return TensorDict({}, batch_size=0)
 
-        routing = self._group_by_hash(metadata.global_indexes)
         # Parser-backed gets are not replayed, matching put: the public API does not constrain parser side effects.
         max_attempts = 1 if data_parser is not None else None
+
+        # A unit request reads the same fields for every row in it, so rows are grouped by the
+        # fields read from them: a sample's own fields once per occurrence, so repeated keys
+        # keep their parser_args, and the fields it links to one source row together, once per
+        # source, field set and parser_arg however many link to it. The source's unit then
+        # parses those fields in one call and replies with the parsed part only.
+        rows_by_fields: dict[tuple[str, ...], list[int]] = defaultdict(list)
+        args_by_fields: dict[tuple[str, ...], list[Any]] = defaultdict(list)
+        slots: dict[tuple[int, str], tuple[tuple[str, ...], int]] = {}  # (sample, field) -> (fields, row)
+        linked_slots: dict[tuple, tuple[tuple[str, ...], int]] = {}  # (source, fields, arg) -> slot
+        for pos, (global_index, links) in enumerate(zip(metadata.global_indexes, metadata._links, strict=True)):
+            parser_arg = None if parser_args is None else parser_args[pos]
+            own = tuple(f for f in metadata.field_names if f not in links)
+            if own:
+                slots.update({(pos, f): (own, len(rows_by_fields[own])) for f in own})
+                rows_by_fields[own].append(global_index)
+                args_by_fields[own].append(parser_arg)
+            fields_by_source: dict[int, list[str]] = defaultdict(list)
+            for field in metadata.field_names:
+                if field in links:
+                    fields_by_source[links[field]].append(field)
+            for source, source_fields in fields_by_source.items():
+                fields = tuple(source_fields)
+                linked = (source, fields, _parser_arg_identity(parser_arg, pos))
+                if linked not in linked_slots:
+                    linked_slots[linked] = (fields, len(rows_by_fields[fields]))
+                    rows_by_fields[fields].append(source)
+                    args_by_fields[fields].append(parser_arg)
+                slots.update({(pos, f): linked_slots[linked] for f in fields})
+        requests = [
+            (su_id, fields, group)
+            for fields, rows in rows_by_fields.items()
+            for su_id, group in self._group_by_hash(rows).items()
+        ]
 
         tasks = [
             self._request_with_retry(
                 "get",
                 su_id,
-                f"samples={len(group.global_indexes)} fields={list(metadata.field_names)}",
+                f"samples={len(group.global_indexes)} fields={list(fields)}",
                 partial(
                     self._get_from_single_storage_unit,
                     group.global_indexes,
-                    metadata.field_names,
+                    list(fields),
                     target_storage_unit=su_id,
                     data_parser=data_parser,
-                    parser_args=None if parser_args is None else [parser_args[p] for p in group.batch_positions],
+                    parser_args=None
+                    if parser_args is None
+                    else [args_by_fields[fields][p] for p in group.batch_positions],
                 ),
                 max_attempts=max_attempts,
             )
-            for su_id, group in routing.items()
+            for su_id, fields, group in requests
         ]
         try:
             results = await asyncio.gather(*tasks)
@@ -849,19 +908,19 @@ class AsyncSimpleStorageManager(StorageManager):
                 f"[{self.storage_manager_id}]: get_data failed. "
                 f"partition_id={metadata.partition_ids[0]}, "
                 f"num_samples={metadata.size}, "
-                f"num_storage_units={len(routing)}, "
+                f"num_requests={len(requests)}, "
                 f"error={type(e).__name__}: {e}"
             )
             raise
 
-        # Scatter results directly to batch positions — no intermediate per-sample dict
-        n = len(metadata.global_indexes)
-        ordered_data: dict[str, list] = {field: [None] * n for field in metadata.field_names}
-
-        for (su_id, group), (fields, su_data) in zip(routing.items(), results, strict=True):
+        values: dict[tuple[tuple[tuple[str, ...], int], str], Any] = {}
+        for (_, fields, group), (_, su_data) in zip(requests, results, strict=True):
             for field in fields:
-                for i, pos in enumerate(group.batch_positions):
-                    ordered_data[field][pos] = su_data[field][i]
+                for i, row in enumerate(group.batch_positions):
+                    values[(fields, row), field] = su_data[field][i]
+        ordered_data = {
+            field: [values[slots[pos, field], field] for pos in range(metadata.size)] for field in metadata.field_names
+        }
 
         tensor_data = {field: self._pack_field_values(v) for field, v in ordered_data.items()}
 
