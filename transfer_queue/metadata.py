@@ -35,10 +35,6 @@ Tag = dict[str, TagScalar | list[TagScalar]]
 BackendMeta = Tag | str | None
 
 
-class TagValidationError(ValueError):
-    """A tag cannot be represented by the native metadata format."""
-
-
 def _metadata_scalar_error(value: object) -> str | None:
     if type(value) is str:
         if not value.isascii():
@@ -77,7 +73,7 @@ def validate_tag(tag: object, *, partition_id: str, sample: str | int) -> None:
     if issue := _metadata_map_error(tag):
         path, error = issue
         entry = f"tag {path}" if path else "tag"
-        raise TagValidationError(f"Invalid {entry} for {sample!r} in partition {partition_id!r}: {error}")
+        raise ValueError(f"Invalid {entry} for {sample!r} in partition {partition_id!r}: {error}")
 
 
 def copy_tag(tag: Tag) -> Tag:
@@ -386,7 +382,7 @@ class BatchMeta:
 
         Returns tuple of slot values to ensure proper reconstruction.
         """
-        self._validate_custom_meta()
+        self.validate_custom_meta()
         return tuple(getattr(self, slot) for slot in self.__slots__)
 
     def __setstate__(self, state):
@@ -404,8 +400,11 @@ class BatchMeta:
                 value = list(map(operator.index, value))
             setattr(self, slot, value)
 
-    def _validate_custom_meta(self) -> None:
+    def validate_custom_meta(self) -> None:
+        """Validate the current tags, including edits made through their public dictionaries."""
         for partition_id, index, tag in zip(self.partition_ids, self.global_indexes, self.custom_meta, strict=True):
+            if type(tag) is dict and not tag:
+                continue
             validate_tag(tag, partition_id=partition_id, sample=index)
 
     @property

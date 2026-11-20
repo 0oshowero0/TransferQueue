@@ -1160,7 +1160,6 @@ class TransferQueueController:
 
         # Partition management
         self.partitions: dict[str, DataPartitionStatus] = {}  # partition_id -> DataPartitionStatus
-        self._prepared_checkpoint: tuple[str, str, dict[str, Any], bool] | None = None
 
         # Partition-GlobalIndex management
         self.index_manager = PartitionIndexManager()  # partition_id -> global_indexes
@@ -2429,8 +2428,11 @@ class TransferQueueController:
                         receiver_id=request_msg.sender_id,
                         message=f"no handler for request_type {request_msg.request_type}",
                     )
-                # Controller tags have already been checked on writes and checkpoint restore.
-                response_frames = response_msg.serialize(validate_batch_tags=False)
+                # Tags in Controller-owned batches were checked on write or restore.
+                for key, value in response_msg.body.items():
+                    if isinstance(value, BatchMeta):
+                        response_msg.body[key] = serial_utils.pack_batch_meta(value)
+                response_frames = response_msg.serialize()
             except Exception as e:
                 # Report errors from both the handler and response codec; the caller awaits a reply.
                 logger.exception(
@@ -2486,6 +2488,7 @@ class TransferQueueController:
             ZMQRequestType.CHECK_PUBLIC_WRITE: self._handle_check_public_write_request,
             ZMQRequestType.SAVE_CONTROLLER_CHECKPOINT: self._handle_save_controller_checkpoint_request,
             ZMQRequestType.LOAD_CONTROLLER_CHECKPOINT: self._handle_load_controller_checkpoint_request,
+            ZMQRequestType.VALIDATE_CONTROLLER_CHECKPOINT: self._handle_validate_controller_checkpoint_request,
         }
         handler = handlers.get(request_msg.request_type)
         if handler is None:
@@ -2494,6 +2497,7 @@ class TransferQueueController:
         checkpoint_requests = {
             ZMQRequestType.SAVE_CONTROLLER_CHECKPOINT,
             ZMQRequestType.LOAD_CONTROLLER_CHECKPOINT,
+            ZMQRequestType.VALIDATE_CONTROLLER_CHECKPOINT,
         }
         if request_msg.request_type in checkpoint_requests:
             return handler(request_msg)
@@ -2758,31 +2762,18 @@ class TransferQueueController:
         )
 
     def _handle_load_controller_checkpoint_request(self, request_msg: ZMQMessage) -> ZMQMessage:
-        params = request_msg.body
-        path = params["path"]
-        phase = params.get("phase", "load")
-        if phase == "load":
-            self.load_checkpoint(path)
-        else:
-            restore_id = params["restore_id"]
-            prepared = self._prepared_checkpoint
-            if phase == "prepare":
-                # Keep one validated snapshot while the client restores storage.
-                state, converted_legacy_dtype = self._read_checkpoint(path)
-                self._prepared_checkpoint = (restore_id, path, state, converted_legacy_dtype)
-            elif phase == "apply":
-                if prepared is None or prepared[:2] != (restore_id, path):
-                    raise RuntimeError(f"No prepared checkpoint for restore {restore_id!r} at {path!r}")
-                self._prepared_checkpoint = None
-                self._apply_checkpoint(path, prepared[2], prepared[3])
-            elif phase == "discard":
-                if prepared is not None and prepared[:2] == (restore_id, path):
-                    self._prepared_checkpoint = None
-            else:
-                raise ValueError(f"Invalid checkpoint restore phase: {phase!r}")
+        self.load_checkpoint(request_msg.body["path"])
         return self._make_response(
             request_msg,
             ZMQRequestType.LOAD_CONTROLLER_CHECKPOINT_RESPONSE,
+            {"success": True},
+        )
+
+    def _handle_validate_controller_checkpoint_request(self, request_msg: ZMQMessage) -> ZMQMessage:
+        self._read_checkpoint(request_msg.body["path"])
+        return self._make_response(
+            request_msg,
+            ZMQRequestType.VALIDATE_CONTROLLER_CHECKPOINT_RESPONSE,
             {"success": True},
         )
 
@@ -2849,7 +2840,26 @@ class TransferQueueController:
         """
         try:
             state, converted_legacy_dtype = self._read_checkpoint(path)
-            self._apply_checkpoint(path, state, converted_legacy_dtype)
+            if converted_legacy_dtype:
+                warnings.warn(
+                    "String dtypes in Controller checkpoints are deprecated. "
+                    "Support for restoring them will be removed in the next release. "
+                    "Re-save the restored checkpoint with this release to migrate it.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
+
+            self.controller_id = state["controller_id"]
+            self.partitions = state["partitions"]
+
+            im = state["index_manager"]
+            self.index_manager.partition_to_indexes = defaultdict(set, im["partition_to_indexes"])
+            self.index_manager.global_index_counter = im["global_index_counter"]
+            self.index_manager.allocated_indexes = im["allocated_indexes"]
+            self.index_manager.set_num_storage_units(self.index_manager.num_storage_units, im["reusable_indexes"])
+
+            self.sampler.load_checkpoint(state["sampler"])
+            logger.info(f"[{self.controller_id}]: restored from {path}")
         except Exception as e:
             raise RuntimeError(f"[{self.controller_id}]: load checkpoint failed: {e}") from e
 
@@ -2874,29 +2884,6 @@ class TransferQueueController:
                     field_meta.dtype = serial_utils.parse_torch_dtype(field_meta.dtype, f"{partition_id}.{name}")
                     converted_legacy_dtype = True
         return state, converted_legacy_dtype
-
-    def _apply_checkpoint(self, path: str, state: dict[str, Any], converted_legacy_dtype: bool) -> None:
-        if converted_legacy_dtype:
-            warnings.warn(
-                "String dtypes in Controller checkpoints are deprecated. "
-                "Support for restoring them will be removed in the next release. "
-                "Re-save the restored checkpoint with this release to migrate it.",
-                FutureWarning,
-                stacklevel=2,
-            )
-
-        self.controller_id = state["controller_id"]
-        self.partitions = state["partitions"]
-
-        im = state["index_manager"]
-        self.index_manager.partition_to_indexes = defaultdict(set, im["partition_to_indexes"])
-        self.index_manager.global_index_counter = im["global_index_counter"]
-        self.index_manager.allocated_indexes = im["allocated_indexes"]
-        self.index_manager.set_num_storage_units(self.index_manager.num_storage_units, im["reusable_indexes"])
-
-        self.sampler.load_checkpoint(state["sampler"])
-
-        logger.info(f"[{self.controller_id}]: restored from {path}")
 
     def register_sampler(
         self,

@@ -259,6 +259,20 @@ class TestRayWorkerKVInterfaceE2E:
         assert result["listed_after_clear"] is False
 
 
+@pytest.mark.parametrize("keys", [["bad"], ["good", "bad"]], ids=["single", "batch"])
+def test_put_with_invalid_tag_leaves_keys_absent(keys):
+    partition_id = "invalid-tag"
+    bad_tag = {"score": {"value": 1}}
+    with pytest.raises(ValueError, match="Invalid tag"):
+        if len(keys) == 1:
+            tq.kv_put(keys[0], partition_id, fields={"ids": torch.ones(2)}, tag=bad_tag)
+        else:
+            fields = TensorDict({"ids": torch.ones(2, 2)}, batch_size=[2])
+            tq.kv_batch_put(keys, partition_id, fields=fields, tags=[{}, bad_tag])
+
+    assert tq.kv_exists(keys, partition_id) == {}
+
+
 class TestKVPutE2E:
     """End-to-end tests for kv_put functionality."""
 

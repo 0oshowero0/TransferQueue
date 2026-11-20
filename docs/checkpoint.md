@@ -160,9 +160,8 @@ See [Save Order and Consistency](#save-order-and-consistency) above. Concurrent 
 
 ### 2. Load is not transactional — partial restore has no rollback
 
-1. The Controller reads and validates its checkpoint once.
-2. If the checkpoint includes storage data, the client restores the storage units.
-3. The Controller applies the validated snapshot.
+1. If the checkpoint includes storage data, the Controller validates its saved metadata before the client restores the storage units.
+2. The Controller loads its checkpoint and replaces its in-memory state.
 
 Run one restore at a time. If storage restore fails after replacing some units, those units hold checkpoint data while the Controller still reflects its pre-restore state.
 

@@ -151,6 +151,8 @@ class ZMQRequestType(ExplicitEnum):
     SAVE_STORAGE_CHECKPOINT_RESPONSE = "SAVE_STORAGE_CHECKPOINT_RESPONSE"
     LOAD_CONTROLLER_CHECKPOINT = "LOAD_CONTROLLER_CHECKPOINT"
     LOAD_CONTROLLER_CHECKPOINT_RESPONSE = "LOAD_CONTROLLER_CHECKPOINT_RESPONSE"
+    VALIDATE_CONTROLLER_CHECKPOINT = "VALIDATE_CONTROLLER_CHECKPOINT"
+    VALIDATE_CONTROLLER_CHECKPOINT_RESPONSE = "VALIDATE_CONTROLLER_CHECKPOINT_RESPONSE"
     LOAD_STORAGE_CHECKPOINT = "LOAD_STORAGE_CHECKPOINT"
     LOAD_STORAGE_CHECKPOINT_RESPONSE = "LOAD_STORAGE_CHECKPOINT_RESPONSE"
 
@@ -247,7 +249,7 @@ class ZMQMessage:
             timestamp=time.time(),
         )
 
-    def serialize(self, *, validate_batch_tags: bool = True) -> list:
+    def serialize(self) -> list:
         """Serialize using zero-copy msgpack; falls back to pickle for unsupported types."""
         msg_dict = {
             "request_type": self.request_type.value,
@@ -257,7 +259,7 @@ class ZMQMessage:
             "timestamp": self.timestamp,
             "body": self.body,
         }
-        return serial_utils.encode(msg_dict, validate_batch_tags=validate_batch_tags)
+        return serial_utils.encode(msg_dict)
 
     @classmethod
     def deserialize(cls, frames: list) -> "ZMQMessage":

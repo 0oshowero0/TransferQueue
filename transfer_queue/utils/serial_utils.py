@@ -34,7 +34,7 @@ import zmq
 from msgspec import msgpack
 from tensordict import TensorDictBase
 
-from transfer_queue.metadata import BatchMeta, TagValidationError
+from transfer_queue.metadata import BatchMeta
 from transfer_queue.utils.logging_utils import get_logger
 
 CUSTOM_TYPE_PICKLE = 1
@@ -71,8 +71,7 @@ class MsgpackEncoder:
 
     """
 
-    def __init__(self, *, validate_batch_tags: bool = True):
-        self.validate_batch_tags = validate_batch_tags
+    def __init__(self):
         self.encoder = msgpack.Encoder(enc_hook=self.enc_hook)
 
     @property
@@ -125,9 +124,8 @@ class MsgpackEncoder:
             return msgpack.Ext(CUSTOM_TYPE_PICKLE, pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
 
         if isinstance(obj, BatchMeta):
-            if self.validate_batch_tags:
-                obj._validate_custom_meta()
-            return msgpack.Ext(CUSTOM_TYPE_BATCH_META, msgpack.encode(_batch_meta_to_wire(obj)))
+            obj.validate_custom_meta()
+            return pack_batch_meta(obj)
 
         if callable(obj):
             # cloudpickle for arbitrary callables (functions, lambdas, functools.partial,
@@ -427,7 +425,8 @@ def decode_field_schema(fields: dict[str, dict[str, Any]]) -> dict[str, dict[str
     return decoded
 
 
-def _batch_meta_to_wire(metadata: BatchMeta) -> dict[str, Any]:
+def pack_batch_meta(metadata: BatchMeta) -> msgpack.Ext:
+    """Pack a batch whose tags have been validated at the input boundary."""
     wire: dict[str, Any] = {
         "global_indexes": metadata.global_indexes,
         "partition_ids": metadata.partition_ids,
@@ -440,7 +439,7 @@ def _batch_meta_to_wire(metadata: BatchMeta) -> dict[str, Any]:
         wire["custom_backend_meta"] = metadata._custom_backend_meta
     if any(metadata._links):
         wire["links"] = metadata._links
-    return wire
+    return msgpack.Ext(CUSTOM_TYPE_BATCH_META, msgpack.encode(wire))
 
 
 def _batch_meta_from_wire(wire: dict[str, Any]) -> BatchMeta:
@@ -456,17 +455,14 @@ def _batch_meta_from_wire(wire: dict[str, Any]) -> BatchMeta:
 
 
 _encoder = MsgpackEncoder()
-_controller_encoder = MsgpackEncoder(validate_batch_tags=False)
 _decoder = MsgpackDecoder()
 
 
-# Values msgpack cannot represent. None of these derive from ValueError: OverflowError is
-# an ArithmeticError, RecursionError a RuntimeError, and msgspec's own errors subclass
-# Exception directly. pickle handles all of them (arbitrary-precision ints,
-# self-referential containers, ...), so they are degradation paths rather than failures.
+# Errors from values MessagePack cannot represent, such as oversized integers,
+# cyclic containers, and text with unpaired surrogates.
 _ENCODE_FALLBACK_ERRORS = (
     TypeError,
-    ValueError,
+    UnicodeError,
     OverflowError,
     RecursionError,
     msgspec.MsgspecError,
@@ -488,17 +484,14 @@ def _is_pickle_fallback(frame: bytestr) -> bool:
     return view.nbytes == _PICKLE_FALLBACK_SENTINEL_SIZE and view.tobytes() == _PICKLE_FALLBACK_SENTINEL
 
 
-def encode(obj: Any, *, validate_batch_tags: bool = True) -> list[bytestr]:
+def encode(obj: Any) -> list[bytestr]:
     """Encode an object via msgpack zero-copy; falls back to pickle on failure.
 
     The pickle path is a normal degradation path (e.g. body contains torch.dtype
     objects). Use this as the single entry point for all ZMQ message serialization.
     """
-    encoder = _encoder if validate_batch_tags else _controller_encoder
     try:
-        return list(encoder.encode(obj))
-    except TagValidationError:
-        raise
+        return list(_encoder.encode(obj))
     except _ENCODE_FALLBACK_ERRORS as e:
         logger.warning(
             "encode: msgpack failed (%s), falling back to pickle.",

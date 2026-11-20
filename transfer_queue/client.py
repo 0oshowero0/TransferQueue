@@ -62,7 +62,7 @@ with_controller_socket = with_zmq_socket(
 )
 
 
-def _group_custom_meta(metadata: BatchMeta, *, tags_validated: bool = False) -> dict[str, dict[int, Tag]]:
+def _snapshot_tags_by_partition(metadata: BatchMeta) -> dict[str, dict[int, Tag]]:
     """Group and snapshot tags before an asynchronous write can modify the batch."""
     if not metadata.global_indexes or not metadata.custom_meta:
         return {}
@@ -71,8 +71,7 @@ def _group_custom_meta(metadata: BatchMeta, *, tags_validated: bool = False) -> 
     for partition_id, index, tag in zip(
         metadata.partition_ids, metadata.global_indexes, metadata.custom_meta, strict=True
     ):
-        if not tags_validated:
-            validate_tag(tag, partition_id=partition_id, sample=index)
+        validate_tag(tag, partition_id=partition_id, sample=index)
         partitions[partition_id][index] = copy_tag(tag)
     return partitions
 
@@ -361,7 +360,7 @@ class AsyncTransferQueueClient:
             ...     batch_meta.update_custom_meta([{"score": 0.9}, {"score": 0.8}])
             ...     await client.async_set_custom_meta(batch_meta)
         """
-        await self._send_custom_meta(_group_custom_meta(metadata), socket=socket)
+        await self._send_custom_meta(_snapshot_tags_by_partition(metadata), socket=socket)
 
     @with_controller_socket
     async def _send_custom_meta(
@@ -473,17 +472,6 @@ class AsyncTransferQueueClient:
             ...     )
         """
 
-        return await self._put_data(data, metadata, partition_id, data_parser)
-
-    async def _put_data(
-        self,
-        data: TensorDict,
-        metadata: BatchMeta | None = None,
-        partition_id: str | None = None,
-        data_parser: Callable[[Any], Any] | None = None,
-        *,
-        tags_validated: bool = False,
-    ) -> BatchMeta:
         if not hasattr(self, "storage_manager") or self.storage_manager is None:
             raise RuntimeError(
                 f"[{self.client_id}]: Storage manager not initialized. "
@@ -511,7 +499,7 @@ class AsyncTransferQueueClient:
 
         if not metadata or metadata.size == 0:
             raise ValueError("metadata cannot be none or empty")
-        partition_custom_meta = _group_custom_meta(metadata, tags_validated=tags_validated)
+        partition_custom_meta = _snapshot_tags_by_partition(metadata)
         # A read-modify-write would otherwise turn every link into a private copy without notice.
         linked = sorted({name for links in metadata._links for name in links if name in data.keys()})
         if linked:
@@ -1482,16 +1470,6 @@ class AsyncTransferQueueClient:
             RuntimeError: If the storage manager is not initialized, or a unit fails.
             NotImplementedError: If the storage backend does not support selective loads.
         """
-        return await self._restore_rows_by_key(partition_id, rows, shards)
-
-    async def _restore_rows_by_key(
-        self,
-        partition_id: str,
-        rows: dict[str, dict[str, Any]],
-        shards: list[dict[str, Any]],
-        *,
-        tags_validated: bool = False,
-    ) -> int:
         if not hasattr(self, "storage_manager") or self.storage_manager is None:
             raise RuntimeError(
                 f"[{self.client_id}]: Storage manager not initialized. "
@@ -1502,13 +1480,11 @@ class AsyncTransferQueueClient:
         tags = []
         for key, row in rows.items():
             tag = row["tag"]
-            if not tags_validated:
-                validate_tag(tag, partition_id=partition_id, sample=key)
-                tag = copy_tag(tag)
-            tags.append(tag)
+            validate_tag(tag, partition_id=partition_id, sample=key)
+            tags.append(copy_tag(tag))
         metadata = await self.async_kv_retrieve_meta(list(rows), partition_id, create=True)
         metadata.update_custom_meta(tags)
-        partition_custom_meta = _group_custom_meta(metadata, tags_validated=True)
+        partition_custom_meta = {partition_id: dict(zip(metadata.global_indexes, metadata.custom_meta, strict=True))}
         target_indexes = dict(zip(rows, metadata.global_indexes, strict=True))
         for shard in shards:
             for record in shard["records"]:
@@ -1548,6 +1524,7 @@ class AsyncTransferQueueClient:
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in save_controller_checkpoint: {str(e)}") from e
 
+    @with_controller_socket
     async def async_load_controller_checkpoint(
         self,
         path: str,
@@ -1568,26 +1545,25 @@ class AsyncTransferQueueClient:
         Raises:
             RuntimeError: If the RPC fails or an unexpected response is received.
         """
-        await self._request_checkpoint_load(path, socket=socket)
-
-    @with_controller_socket
-    async def _request_checkpoint_load(
-        self,
-        path: str,
-        *,
-        phase: str = "load",
-        restore_id: str | None = None,
-        socket: zmq.asyncio.Socket | None = None,
-    ) -> None:
         try:
             await self._request_controller(
                 socket=socket,
                 request_type=ZMQRequestType.LOAD_CONTROLLER_CHECKPOINT,
                 response_type=ZMQRequestType.LOAD_CONTROLLER_CHECKPOINT_RESPONSE,
-                body={"path": path, "phase": phase, "restore_id": restore_id},
+                body={"path": path},
             )
         except Exception as e:
             raise RuntimeError(f"[{self.client_id}]: Error in load_controller_checkpoint: {str(e)}") from e
+
+    @with_controller_socket
+    async def async_validate_controller_checkpoint(self, path: str, socket: zmq.asyncio.Socket | None = None) -> None:
+        """Validate saved metadata on the Controller before restoring storage."""
+        await self._request_controller(
+            socket=socket,
+            request_type=ZMQRequestType.VALIDATE_CONTROLLER_CHECKPOINT,
+            response_type=ZMQRequestType.VALIDATE_CONTROLLER_CHECKPOINT_RESPONSE,
+            body={"path": path},
+        )
 
     async def async_save_storage_checkpoint(self, checkpoint_dir: str) -> None:
         """Asynchronously save storage state to a directory via StorageManager.
@@ -1719,9 +1695,10 @@ class TransferQueueClient(AsyncTransferQueueClient):
         self._link = _make_sync(self.async_link)
         self._validate_dump_schema = _make_sync(self.async_validate_dump_schema)
         self._dump_rows_by_index = _make_sync(self.async_dump_rows_by_index)
-        self._load_rows_by_key = _make_sync(self._restore_rows_by_key)
+        self._load_rows_by_key = _make_sync(self.async_load_rows_by_key)
         self._save_controller_checkpoint = _make_sync(self.async_save_controller_checkpoint)
-        self._load_controller_checkpoint = _make_sync(self._request_checkpoint_load)
+        self._load_controller_checkpoint = _make_sync(self.async_load_controller_checkpoint)
+        self._validate_controller_checkpoint = _make_sync(self.async_validate_controller_checkpoint)
         self._save_storage_checkpoint = _make_sync(self.async_save_storage_checkpoint)
         self._load_storage_checkpoint = _make_sync(self.async_load_storage_checkpoint)
 
@@ -2271,6 +2248,10 @@ class TransferQueueClient(AsyncTransferQueueClient):
             RuntimeError: If the RPC fails or an unexpected response is received.
         """
         return self._load_controller_checkpoint(path)
+
+    def validate_controller_checkpoint(self, path: str) -> None:
+        """Check saved metadata on the Controller before restoring storage."""
+        self._validate_controller_checkpoint(path)
 
     def save_storage_checkpoint(self, checkpoint_dir: str) -> None:
         """Synchronously save storage state to a directory via StorageManager.
